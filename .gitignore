@@ -1,0 +1,5 @@
+Local/*
+*.cer
+*.pfx
+lr-session-*.jsonl
+Run-LR.ps1
