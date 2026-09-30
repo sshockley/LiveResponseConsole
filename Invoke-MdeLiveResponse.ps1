@@ -747,13 +747,14 @@ function Start-Repl {
                             if ($parts.Count -lt 2) { Write-Status 'Usage: library upload <path> [description]' 'Warn'; continue }
                             $file = (Resolve-Path -LiteralPath $parts[1]).Path
                             $desc = if ($parts.Count -gt 2) { ($parts[2..($parts.Count - 1)] -join ' ') } else { 'Uploaded by Invoke-MdeLiveResponse.ps1' }
+                            $isScript = [IO.Path]::GetExtension($file) -in '.ps1', '.psm1'
                             $form = @{
-                                file                  = Get-Item -LiteralPath $file
-                                Description           = $desc
-                                HasParameters         = 'true'
-                                ParametersDescription = 'Passed through the Args parameter'
-                                OverrideIfExists      = 'true'
+                                file             = Get-Item -LiteralPath $file
+                                Description      = $desc
+                                HasParameters    = if ($isScript) { 'true' } else { 'false' }
+                                OverrideIfExists = 'true'
                             }
+                            if ($isScript) { $form.ParametersDescription = 'Passed through the Args parameter' }
                             Invoke-MdeApi -Method POST -Path 'api/libraryfiles' -Form $form | Out-Null
                             Write-Status "Uploaded $(Split-Path $file -Leaf) to the tenant library." 'Good'
                         }
