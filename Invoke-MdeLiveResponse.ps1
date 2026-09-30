@@ -547,52 +547,68 @@ function Show-Help {
 }
 
 function Split-CommandLine {
-    # Emits one string per token. Callers MUST wrap in @() so a single token stays an
-    # array: without it, $parts[0] returns one character and $parts.Count fails.
+    # Emits one string per token, quotes stripped. With -AsObject, emits one object per
+    # token with Text (quotes stripped) and Quoted (was it wrapped in double quotes), so
+    # callers can tell a literal "--get" argument from the --get chain separator.
+    # Callers MUST wrap in @() so a single token stays an array: without it, $parts[0]
+    # returns one character and $parts.Count fails.
     # Do not use -NoEnumerate here. It nests inside the callers' @() wrappers.
-    param([string]$Line)
+    param([string]$Line, [switch]$AsObject)
     [regex]::Matches($Line, '"([^"]*)"|(\S+)') | ForEach-Object {
-        if ($_.Groups[1].Success) { $_.Groups[1].Value } else { $_.Groups[2].Value }
+        $quoted = $_.Groups[1].Success
+        $text = if ($quoted) { $_.Groups[1].Value } else { $_.Groups[2].Value }
+        if ($AsObject) { [pscustomobject]@{ Text = $text; Quoted = $quoted } } else { $text }
     }
 }
 
 function Build-ChainedCommands {
-    <# Parses a line with optional --put/--run/--get segments into an ordered command array. #>
+    <# Parses a line with optional --put/--run/--get segments into an ordered command array.
+       Only an unquoted --put/--run/--get starts a segment; a quoted "--get" is an ordinary
+       argument. Quoted tokens keep their internal spacing and are re-quoted in Args so the
+       script on the endpoint receives them as one argument, as typed. #>
     param([string]$Line)
 
     $segments = [ordered]@{}
     $current = $null
-    $buffer = [System.Collections.Generic.List[string]]::new()
 
-    foreach ($tok in (Split-CommandLine $Line)) {
-        if ($tok -in '--put', '--run', '--get') {
-            if ($current) { $segments[$current] = ($buffer -join ' ') }
-            $current = $tok.TrimStart('-')
-            $buffer.Clear()
-        } else {
-            $buffer.Add($tok)
+    foreach ($tok in @(Split-CommandLine $Line -AsObject)) {
+        if (-not $tok.Quoted -and $tok.Text -in '--put', '--run', '--get') {
+            $current = $tok.Text.TrimStart('-')
+            # A repeated separator replaces the earlier segment (last one wins).
+            $segments[$current] = [System.Collections.Generic.List[object]]::new()
+        } elseif ($current) {
+            $segments[$current].Add($tok)
         }
+        # Tokens before the first separator have nowhere to go and are dropped.
     }
-    if ($current) { $segments[$current] = ($buffer -join ' ') }
 
-    # Fail if value is empty
+    # Fail locally rather than submit a PutFile/GetFile with an empty value, which
+    # would burn a session round-trip only to be rejected server-side.
     foreach ($key in @($segments.Keys)) {
-        if ([string]::IsNullOrWhiteSpace($segments[$key])) { throw "--$key requires a value." }
+        $hasValue = @($segments[$key] | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Text) }).Count -gt 0
+        if (-not $hasValue) { throw "--$key requires a value." }
     }
 
     $commands = @()
     if ($segments.Contains('put')) {
-        $commands += @{ type = 'PutFile'; params = @(@{ key = 'FileName'; value = $segments['put'] }) }
+        $name = @($segments['put'] | ForEach-Object Text) -join ' '
+        $commands += @{ type = 'PutFile'; params = @(@{ key = 'FileName'; value = $name }) }
     }
     if ($segments.Contains('run')) {
-        $parts = @(Split-CommandLine $segments['run'])
-        if (-not $parts) { throw 'run requires a script name from the library.' }
-        $p = @(@{ key = 'ScriptName'; value = $parts[0] })
-        if ($parts.Count -gt 1) { $p += @{ key = 'Args'; value = ($parts[1..($parts.Count - 1)] -join ' ') } }
+        $parts = @($segments['run'])
+        if ([string]::IsNullOrWhiteSpace($parts[0].Text)) { throw 'run requires a script name from the library.' }
+        $p = @(@{ key = 'ScriptName'; value = $parts[0].Text })
+        if ($parts.Count -gt 1) {
+            $argTokens = foreach ($t in $parts[1..($parts.Count - 1)]) {
+                if ($t.Quoted) { '"{0}"' -f $t.Text } else { $t.Text }
+            }
+            $p += @{ key = 'Args'; value = (@($argTokens) -join ' ') }
+        }
         $commands += @{ type = 'RunScript'; params = $p }
     }
     if ($segments.Contains('get')) {
-        $commands += @{ type = 'GetFile'; params = @(@{ key = 'Path'; value = $segments['get'] }) }
+        $path = @($segments['get'] | ForEach-Object Text) -join ' '
+        $commands += @{ type = 'GetFile'; params = @(@{ key = 'Path'; value = $path }) }
     }
     $commands
 }
@@ -739,8 +755,10 @@ function Start-Repl {
                 }
 
                 { $_ -in 'run', 'get', 'put' } {
-                    # Normalize "run X args --get Y" into the chained form.
-                    $normalized = '--{0} {1}' -f $verb, $rest
+                    # Normalize "run X args --get Y" into the chained form. Use the raw text
+                    # so quotes survive to Build-ChainedCommands, which needs them to tell a
+                    # literal "--get" argument from the chain separator.
+                    $normalized = '--{0} {1}' -f $verb, $rawRest
                     $commands = @(Build-ChainedCommands $normalized)
                     if (-not $commands) { Write-Status 'Nothing to submit.' 'Warn'; continue }
                     Show-ActionResults (Invoke-LiveResponseAction -Commands $commands -ActionComment $script:SessionComment)
