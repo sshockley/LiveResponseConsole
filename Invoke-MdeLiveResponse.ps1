@@ -265,6 +265,7 @@ function Invoke-MdeApi {
         [int]$MaxRetries = 4
     )
     $uri = if ($Path -match '^https?://') { $Path } else { '{0}/{1}' -f $script:Cfg.Api, $Path.TrimStart('/') }
+    $refreshed = $false
 
     for ($attempt = 0; $attempt -le $MaxRetries; $attempt++) {
         $params = @{
@@ -301,7 +302,9 @@ function Invoke-MdeApi {
             continue
         }
 
-        if ($code -eq 401 -and $attempt -eq 0) {
+        # Refresh the token once per call
+        if ($code -eq 401 -and -not $refreshed) {
+            $refreshed = $true
             $script:AccessToken = $null
             continue
         }
