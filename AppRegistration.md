@@ -109,3 +109,56 @@ Notes for all methods:
 - Remove `Library.Manage` role if you are not using the `library` verbs.
 - Role assignments can take a minute to show up in tokens. A 403 on the first run that clears by itself is usually propagation.
 - `New-MgApplication` publishes no credential. The app cannot authenticate until you attach the certificate below.
+
+
+## Delegated sign-in (`-UseDeviceCode`)
+
+Everything above configures **application** permissions, which is all the certificate and
+client-secret flows need. `-UseDeviceCode` signs in as a user instead, and the app
+registration needs two more things:
+
+1. **Allow public client flows** must be enabled. Without it the token request fails with
+   `AADSTS7000218: The request body must contain the following parameter: 'client_assertion' or 'client_secret'`.
+
+   ```powershell
+   # Azure CLI
+   az ad app update --id $appId --is-fallback-public-client true
+
+   # Microsoft Graph PowerShell
+   Update-MgApplication -ApplicationId $app.Id -IsFallbackPublicClient
+   ```
+
+2. **Delegated** counterparts of the permissions, admin-consented. Application roles are
+   not used in a delegated token, so add the `Scope`-type permissions
+   `Machine.LiveResponse`, `Machine.ReadWrite` and `Library.Manage` on the
+   WindowsDefenderATP API.
+
+   ```powershell
+   # Azure CLI: resolve the delegated (oauth2PermissionScopes) IDs and add them as Scope
+   $scopes = 'Machine.LiveResponse','Machine.ReadWrite','Library.Manage'
+   foreach ($s in $scopes) {
+       $id = az ad sp show --id $mdeApi `
+           --query "oauth2PermissionScopes[?value=='$s'].id | [0]" -o tsv
+       if (-not $id) { throw "Delegated scope not found on WindowsDefenderATP: $s" }
+       az ad app permission add --id $appId --api $mdeApi --api-permissions "$id=Scope"
+   }
+   az ad app permission admin-consent --id $appId
+   ```
+
+   ```powershell
+   # Microsoft Graph PowerShell: grant the delegated scopes tenant-wide
+   $scopes = 'Machine.LiveResponse','Machine.ReadWrite','Library.Manage'
+   New-MgOauth2PermissionGrant -BodyParameter @{
+       clientId    = $sp.Id
+       consentType = 'AllPrincipals'
+       resourceId  = $mdeSp.Id
+       scope       = ($scopes -join ' ')
+   } | Out-Null
+   ```
+
+Notes on using delegated permissions:
+
+- The signed-in analyst also needs an MDE RBAC role that permits Live Response on the
+  target device group. The app's permissions alone are not enough.
+- Machine actions are attributed to the **user**, not the app registration, in the Action
+  center and in `actions` output. That is often the point of choosing this flow.
