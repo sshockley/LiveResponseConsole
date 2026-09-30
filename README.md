@@ -38,30 +38,22 @@ library upload ./Invoke-LRCommand.ps1 "Analyst command channel"
 ## Authentication
 
 ```powershell
-# Set up tenant ID and client ID in environment
-$tid="<tenant id>"
-$cid="<app id>"
-$pwd = Read-Host "Certificate password" -AsSecureString
+# Set up tenant ID and client ID variables
+$tid = "<tenant id>"
+$cid = "<app id>"
+$pfxPwd = Read-Host 'PFX password' -AsSecureString
 
 # Certificate (preferred, no shared secret at rest)
 ./Invoke-MdeLiveResponse.ps1 -TenantId $tid -ClientId $cid `
-    -CertificatePath ./lr-app.pfx -CertificatePassword $pwd -DeviceName ws-eng-042
+    -CertificatePath ./lr-app.pfx -CertificatePassword $pfxPwd -DeviceName ws-eng-042
 
 # Secret from environment
 $env:MDE_CLIENT_SECRET = '...'   # or omit and be prompted
 ./Invoke-MdeLiveResponse.ps1 -TenantId $tid -ClientId $cid -DeviceName ws-eng-042
 
-# Delegated
+# Delegated (needs public client flows + delegated permissions, see AppRegistration.md)
 ./Invoke-MdeLiveResponse.ps1 -TenantId $tid -ClientId $cid -UseDeviceCode -DeviceName ws-eng-042
 ```
-
-```powershell
-$pfxPwd = Read-Host 'PFX password' -AsSecureString
-./Invoke-MdeLiveResponse.ps1 -TenantId $tid -ClientId $cid `
-    -CertificatePath ./lr-app.pfx -CertificatePassword $pfxPwd -DeviceName ws-eng-042
-```
-
-
 ## Parameters
 
 Clouds: `-Cloud Commercial|UsGovGcc|UsGovGccHigh|UsGovDoD`. Override the host with `-ApiBaseUri https://eu.api.security.microsoft.com` for lower latency. Verify gov host names against current docs as they can change.
@@ -99,6 +91,7 @@ actions [n]                    recent API-initiated actions on this device
 cancel <actionId> [comment]    cancel a pending action
 comment <text>                 audit comment applied to new actions
 last                           reprint last RunScript output
+result <actionId> [index]      re-fetch the output of any past action
 help | exit
 
 library                        list library files
