@@ -820,6 +820,47 @@ function Write-ConsoleError {
     Write-Transcript @{ event = 'error'; message = $ErrorRecord.Exception.Message; input = $Line }
 }
 
+
+function Initialize-ConsoleInput {
+    <# Best-effort PSReadLine so the REPL gets history, arrow keys and line editing.
+       Console commands are kept out of the on-disk PSReadLine history for this session
+       (they often name case paths and hosts); the caller's setting is restored on exit. #>
+    $script:UsePSReadLine = $false
+    $script:PrevHistorySaveStyle = $null
+    try {
+        Import-Module PSReadLine -ErrorAction Stop
+        if (Get-Command PSConsoleHostReadLine -ErrorAction SilentlyContinue) {
+            $script:PrevHistorySaveStyle = (Get-PSReadLineOption).HistorySaveStyle
+            Set-PSReadLineOption -HistorySaveStyle SaveNothing
+            $script:UsePSReadLine = $true
+        }
+    } catch {
+        # Not available (e.g. no console, or a host without PSReadLine): Read-Host is fine.
+    }
+}
+
+function Restore-ConsoleInput {
+    if ($null -ne $script:PrevHistorySaveStyle) {
+        try { Set-PSReadLineOption -HistorySaveStyle $script:PrevHistorySaveStyle } catch { }
+    }
+}
+
+function Read-ConsoleLine {
+    <# Reads one line. Uses PSReadLine when it initialized cleanly; if it throws at read
+       time (redirected input, odd hosts), falls back to Read-Host for the rest of the
+       session rather than retrying every line. #>
+    param([string]$Prompt)
+    Write-Host $Prompt -NoNewline -ForegroundColor Cyan
+    if ($script:UsePSReadLine) {
+        try {
+            return (PSConsoleHostReadLine)
+        } catch {
+            $script:UsePSReadLine = $false
+        }
+    }
+    Read-Host
+}
+
 function Start-Repl {
     Write-Host ''
     Write-Status "Live Response session context established." 'Good'
@@ -830,15 +871,18 @@ function Start-Repl {
     Write-Host '  Type "help" for commands. Each command is a tenant-logged machine action.' -ForegroundColor DarkGray
     Write-Host ''
 
-    while ($true) {
-        $prompt = '{0}> ' -f $script:Machine.computerDnsName
-        Write-Host $prompt -NoNewline -ForegroundColor Cyan
-        $line = Read-Host
-        try {
-            if (-not (Invoke-ConsoleLine $line)) { return }
-    } catch {
-            Write-ConsoleError -ErrorRecord $_ -Line $line
+    Initialize-ConsoleInput
+    try {
+        while ($true) {
+            $line = Read-ConsoleLine -Prompt ('{0}> ' -f $script:Machine.computerDnsName)
+            try {
+                if (-not (Invoke-ConsoleLine $line)) { return }
+            } catch {
+                Write-ConsoleError -ErrorRecord $_ -Line $line
+            }
         }
+    } finally {
+        Restore-ConsoleInput
     }
 }
 
