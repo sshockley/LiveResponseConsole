@@ -575,6 +575,11 @@ function Build-ChainedCommands {
     }
     if ($current) { $segments[$current] = ($buffer -join ' ') }
 
+    # Fail if value is empty
+    foreach ($key in @($segments.Keys)) {
+        if ([string]::IsNullOrWhiteSpace($segments[$key])) { throw "--$key requires a value." }
+    }
+
     $commands = @()
     if ($segments.Contains('put')) {
         $commands += @{ type = 'PutFile'; params = @(@{ key = 'FileName'; value = $segments['put'] }) }
