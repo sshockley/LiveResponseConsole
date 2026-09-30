@@ -495,7 +495,13 @@ function Receive-LiveResponseResult {
             Write-Status "  collected -> $out" 'Good'
         }
         Remove-Item $tmp -Force
-        Write-Transcript @{ event = 'getfile'; actionId = $ActionId; savedTo = $out }
+
+        # Hash what was written to disk so the transcript can stand as evidence that the
+        # file examined later is the file that was collected.
+        $sha256 = (Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToLower()
+        $length = (Get-Item -LiteralPath $out).Length
+        Write-Status "  sha256 $sha256" 'Dim'
+        Write-Transcript @{ event = 'getfile'; actionId = $ActionId; index = $Index; savedTo = $out; sha256 = $sha256; bytes = $length }
         return
     }
 
