@@ -193,11 +193,15 @@ function Request-Token {
 
     switch ($script:AuthMode) {
         'Certificate' {
-            # Not $pwd: that is the automatic working-directory variable.
             $certPlain = if ($CertificatePassword) { Unprotect-SecureString $CertificatePassword } else { $null }
-            $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
-                (Resolve-Path -LiteralPath $CertificatePath).Path, $certPlain,
-                [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+            $certFile = (Resolve-Path -LiteralPath $CertificatePath).Path
+            $keyFlags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
+            $loader = 'System.Security.Cryptography.X509Certificates.X509CertificateLoader' -as [type]
+            $cert = if ($loader) {
+                $loader::LoadPkcs12FromFile($certFile, $certPlain, $keyFlags)
+            } else {
+                [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($certFile, $certPlain, $keyFlags)
+            }
             $body = @{
                 grant_type            = 'client_credentials'
                 client_id             = $ClientId
