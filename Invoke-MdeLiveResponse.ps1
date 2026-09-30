@@ -699,12 +699,16 @@ function Start-Repl {
                 'actions' {
                     $take = if ($rest -match '^\d+$') { [int]$rest } else { 10 }
                     $filter = [uri]::EscapeDataString("machineId eq '$($script:Machine.id)'")
-                    (Invoke-MdeApi -Path "api/machineactions?`$filter=$filter&`$top=$take").value |
+                    # Grab everything and sort locally
+                    $fetch = [Math]::Max(100, $take)
+                    @((Invoke-MdeApi -Path "api/machineactions?`$filter=$filter&`$top=$fetch").value) |
+                        Sort-Object { [datetime]$_.creationDateTimeUtc } -Descending |
+                        Select-Object -First $take |
                         Select-Object id, type, status, requestor, creationDateTimeUtc | Format-Table -AutoSize
                     continue
                 }
 
-                'cancel' {
+                    'cancel' {
                     $parts = @(Split-CommandLine $rest)
                     if (-not $parts) { Write-Status 'Usage: cancel <actionId> [comment]' 'Warn'; continue }
                     $c = if ($parts.Count -gt 1) { ($parts[1..($parts.Count - 1)] -join ' ') } else { 'Cancelled by analyst' }
