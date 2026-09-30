@@ -2,6 +2,8 @@
 
 REPL-style client for Microsoft Defender for Endpoint Live Response
 
+[![CI](https://github.com/sshockley/LiveResponseConsole/actions/workflows/ci.yml/badge.svg)](https://github.com/sshockley/LiveResponseConsole/actions/workflows/ci.yml)
+
 ## Files
 
 | File | Purpose |
@@ -141,3 +143,15 @@ Expect roughly 10 to 40 seconds per command, unlike the sub-second response of t
 - A failed command in a chain aborts everything after it.
 - Backslashes in `GetFile` paths are escaped by the script; don't pre-escape them.
 - All actions are logged tenant-side and attributed to the app registration, not to you.  Use `comment` to record case context.
+
+
+## Development
+
+Unit tests cover the network-free parsing and sanitizing helpers (Pester 5). CI runs
+PSScriptAnalyzer (failing on Error severity only) and the tests on Windows and Ubuntu.
+
+```powershell
+Install-Module Pester -MinimumVersion 5.5 -Scope CurrentUser -Force
+Invoke-Pester -Path ./tests -Output Detailed
+Invoke-ScriptAnalyzer -Path . -Recurse
+```

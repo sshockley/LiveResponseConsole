@@ -15,6 +15,10 @@
         "securestring",
         "securitycenter",
         "startswith",
-        "ungzipped"
+        "ungzipped",
+        "XLEN"
+    ],
+    "cSpell.ignoreWords": [
+        "Ünïcödé"
     ]
 }
