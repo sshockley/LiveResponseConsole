@@ -40,6 +40,9 @@ Write-Output "------------------------"
 $sw = [Diagnostics.Stopwatch]::StartNew()
 $exit = 0
 
+# Clear any previous errors
+$Error.Clear()
+
 try {
     # Capture both success and error streams so failures surface in the LR result.
     $output = Invoke-Expression -Command $command 2>&1
