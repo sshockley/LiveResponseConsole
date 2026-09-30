@@ -324,7 +324,9 @@ function Resolve-MdeMachine {
 
     if ($Id) { return Invoke-MdeApi -Path "api/machines/$Id" }
 
-    $filter = [uri]::EscapeDataString("startswith(computerDnsName,'$($Name.ToLower())')")
+    # OData string literals escape a single quote by doubling it.
+    $literal = $Name.ToLower().Replace("'", "''")
+    $filter = [uri]::EscapeDataString("startswith(computerDnsName,'$literal')")
     $hits = (Invoke-MdeApi -Path "api/machines?`$filter=$filter").value
 
     if (-not $hits) { throw "No onboarded device matches '$Name'." }
