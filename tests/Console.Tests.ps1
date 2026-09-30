@@ -7,7 +7,7 @@
 #>
 
 BeforeAll {
-    $scriptPath = Join-Path $PSScriptRoot '..' 'Invoke-MdeLiveResponse.ps1'
+    $scriptPath = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'Invoke-MdeLiveResponse.ps1'
     $tokens = $null
     $parseErrors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors)
@@ -15,7 +15,7 @@ BeforeAll {
         throw "Parse errors in ${scriptPath}: $($parseErrors | ForEach-Object { $_.Message } | Out-String)"
     }
 
-    foreach ($name in 'Split-CommandLine', 'Build-ChainedCommands', 'Get-GzipOriginalName', 'Remove-ControlCharacter') {
+    foreach ($name in 'Split-CommandLine', 'Build-ChainedCommand', 'Get-GzipOriginalName', 'Remove-ControlCharacter') {
         $fn = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -30,6 +30,8 @@ BeforeAll {
     function New-GzipHeader {
         # Builds the leading bytes of a gzip member: ID1 ID2 CM FLG MTIME(4) XFL OS
         # [FNAME NUL] followed by a few filler bytes so the length check passes.
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+            Justification = 'Test fixture that returns an in-memory byte array.')]
         param([string]$Name, [switch]$NoName, [switch]$WithExtra)
         $flg = 0
         if (-not $NoName) { $flg = $flg -bor 0x08 }
@@ -94,9 +96,9 @@ Describe 'Split-CommandLine' {
     }
 }
 
-Describe 'Build-ChainedCommands' {
+Describe 'Build-ChainedCommand' {
     It 'produces a single RunScript for a plain run' {
-        $c = @(Build-ChainedCommands '--run Foo.ps1')
+        $c = @(Build-ChainedCommand '--run Foo.ps1')
         $c.Count | Should -Be 1
         $c[0].type | Should -Be 'RunScript'
         Get-Param $c[0] 'ScriptName' | Should -Be 'Foo.ps1'
@@ -104,12 +106,12 @@ Describe 'Build-ChainedCommands' {
     }
 
     It 'passes arguments through joined by single spaces' {
-        $c = @(Build-ChainedCommands '--run Foo.ps1 -full   -out C:\t')
+        $c = @(Build-ChainedCommand '--run Foo.ps1 -full   -out C:\t')
         Get-Param $c[0] 'Args' | Should -Be '-full -out C:\t'
     }
 
     It 'orders commands put, run, get regardless of input order' {
-        $c = @(Build-ChainedCommands '--get C:\x.zip --run Foo.ps1 --put tool.exe')
+        $c = @(Build-ChainedCommand '--get C:\x.zip --run Foo.ps1 --put tool.exe')
         $c.type | Should -Be @('PutFile', 'RunScript', 'GetFile')
         Get-Param $c[0] 'FileName' | Should -Be 'tool.exe'
         Get-Param $c[1] 'ScriptName' | Should -Be 'Foo.ps1'
@@ -117,48 +119,48 @@ Describe 'Build-ChainedCommands' {
     }
 
     It 'treats a quoted "--get" as a script argument, not a separator' {
-        $c = @(Build-ChainedCommands '--run Foo.ps1 "--get" plain')
+        $c = @(Build-ChainedCommand '--run Foo.ps1 "--get" plain')
         $c.Count | Should -Be 1
         $c[0].type | Should -Be 'RunScript'
         Get-Param $c[0] 'Args' | Should -Be '"--get" plain'
     }
 
     It 'still recognizes an unquoted separator after a quoted one' {
-        $c = @(Build-ChainedCommands '--run Foo.ps1 "--get" --get C:\real')
+        $c = @(Build-ChainedCommand '--run Foo.ps1 "--get" --get C:\real')
         $c.type | Should -Be @('RunScript', 'GetFile')
         Get-Param $c[0] 'Args' | Should -Be '"--get"'
         Get-Param $c[1] 'Path' | Should -Be 'C:\real'
     }
 
     It 're-quotes quoted arguments and keeps their internal spacing' {
-        $c = @(Build-ChainedCommands '--run Foo.ps1 -name "a  b" -x')
+        $c = @(Build-ChainedCommand '--run Foo.ps1 -name "a  b" -x')
         Get-Param $c[0] 'Args' | Should -Be '-name "a  b" -x'
     }
 
     It 'keeps spaces in a quoted get path' {
-        $c = @(Build-ChainedCommands '--get "C:\Program Files\App\log.txt"')
+        $c = @(Build-ChainedCommand '--get "C:\Program Files\App\log.txt"')
         $c.Count | Should -Be 1
         Get-Param $c[0] 'Path' | Should -Be 'C:\Program Files\App\log.txt'
     }
 
     It 'throws for an empty --get segment' {
-        { Build-ChainedCommands '--run Foo.ps1 --get' } | Should -Throw '--get requires a value.'
+        { Build-ChainedCommand '--run Foo.ps1 --get' } | Should -Throw '--get requires a value.'
     }
 
     It 'throws for an empty --put segment' {
-        { Build-ChainedCommands '--put --run Foo.ps1' } | Should -Throw '--put requires a value.'
+        { Build-ChainedCommand '--put --run Foo.ps1' } | Should -Throw '--put requires a value.'
     }
 
     It 'throws for a quoted empty value' {
-        { Build-ChainedCommands '--get ""' } | Should -Throw '--get requires a value.'
+        { Build-ChainedCommand '--get ""' } | Should -Throw '--get requires a value.'
     }
 
     It 'throws when run has no script name' {
-        { Build-ChainedCommands '--run' } | Should -Throw '--run requires a value.'
+        { Build-ChainedCommand '--run' } | Should -Throw '--run requires a value.'
     }
 
     It 'returns nothing when no separator is present' {
-        @(Build-ChainedCommands 'Foo.ps1 -a').Count | Should -Be 0
+        @(Build-ChainedCommand 'Foo.ps1 -a').Count | Should -Be 0
     }
 }
 
@@ -206,7 +208,9 @@ Describe 'Remove-ControlCharacter' {
     }
 
     It 'leaves ordinary text untouched' {
-        $in = 'Ünïcödé text with symbols !@#$%^&*() and 日本語'
+        $accented = -join [char[]](0xDC, 0x6E, 0xEF, 0x63, 0xF6, 0x64, 0xE9)   # U-umlaut, n, i-diaeresis, c, o-umlaut, d, e-acute
+        $cjk = -join [char[]](0x65E5, 0x672C, 0x8A9E)                          # three CJK ideographs ("Japanese language")
+        $in = $accented + ' text with symbols !@#$%^&*() and ' + $cjk
         Remove-ControlCharacter $in | Should -Be $in
     }
 

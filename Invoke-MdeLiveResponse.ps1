@@ -37,8 +37,12 @@
 .EXAMPLE
     ./Invoke-MdeLiveResponse.ps1 -TenantId $tid -ClientId $cid -DeviceName ws-eng-042
 #>
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
+    Justification = 'Parameters are read inside nested functions; UseDeviceCode is a parameter-set selector.')]
 [CmdletBinding(DefaultParameterSetName = 'Secret')]
 param(
+    # PSScriptAnalyzer: UseDeviceCode is never read by name because its only job is to
+    # select the 'DeviceCode' parameter.
     [Parameter(Mandatory)][string]$TenantId,
     [Parameter(Mandatory)][string]$ClientId,
 
@@ -138,6 +142,8 @@ function Remove-ControlCharacter {
        output and gzip FNAME fields come from the endpoint, which on a compromised host is
        attacker-controlled; raw escape sequences could otherwise rewrite the analyst's
        terminal or forge lines in the transcript. #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Pure function: returns a sanitized copy of the input string.')]
     param([AllowNull()][AllowEmptyString()][string]$Text)
     if ([string]::IsNullOrEmpty($Text)) { return $Text }
     [regex]::Replace($Text, '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\x80-\x9F]', [string][char]0xFFFD)
@@ -153,6 +159,8 @@ function Unprotect-SecureString {
 #region Authentication --------------------------------------------------------
 
 function New-ClientAssertion {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Builds an in-memory token string; no system state is changed.')]
     param(
         [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
         [string]$ClientIdValue,
@@ -333,7 +341,9 @@ function Invoke-MdeApi {
         try {
             $err = $resp.Content | ConvertFrom-Json
             if ($err.error) { $msg = '{0}: {1}' -f $err.error.code, $err.error.message }
-        } catch { }
+        } catch {
+            Write-Verbose "Error body on $Method $uri is not JSON; reporting it verbatim."
+        }
         throw ('HTTP {0} on {1} {2} -- {3}' -f $code, $Method, $uri, $msg)
     }
     throw "Gave up after $MaxRetries retries on $Method $uri"
@@ -443,7 +453,7 @@ function Wait-MdeMachineAction {
     $null
 }
 
-function Show-ActionResults {
+function Show-ActionResult {
     <# Pulls each command's result. PutFile produces none. #>
     # Not Mandatory: the callers legitimately pass $null when an action was never
     # created or never became visible, and Mandatory refuses to bind $null.
@@ -548,7 +558,9 @@ function Receive-LiveResponseResult {
                 }
             }
         }
-    } catch { }
+    } catch {
+        Write-Verbose 'RunScript result is not JSON; printing raw text.'
+    }
 
     if (-not $printed) { Write-Host $text }
     $script:LastResult = $text
@@ -603,7 +615,7 @@ function Split-CommandLine {
     }
 }
 
-function Build-ChainedCommands {
+function Build-ChainedCommand {
     <# Parses a line with optional --put/--run/--get segments into an ordered command array.
        Only an unquoted --put/--run/--get starts a segment; a quoted "--get" is an ordinary
        argument. Quoted tokens keep their internal spacing and are re-quoted in Args so the
@@ -796,18 +808,18 @@ function Invoke-ConsoleLine {
                     @{ key = 'Args'; value = $rawRest }
                 )
             })
-            Show-ActionResults (Invoke-LiveResponseAction -Commands $commands -ActionComment $script:SessionComment)
+            Show-ActionResult (Invoke-LiveResponseAction -Commands $commands -ActionComment $script:SessionComment)
             break
         }
 
         { $_ -in 'run', 'get', 'put' } {
             # Normalize "run X args --get Y" into the chained form. Use the raw text
-            # so quotes survive to Build-ChainedCommands, which needs them to tell a
+            # so quotes survive to Build-ChainedCommand, which needs them to tell a
             # literal "--get" argument from the chain separator.
             $normalized = '--{0} {1}' -f $verb, $rawRest
-            $commands = @(Build-ChainedCommands $normalized)
+            $commands = @(Build-ChainedCommand $normalized)
             if (-not $commands) { Write-Status 'Nothing to submit.' 'Warn'; break }
-            Show-ActionResults (Invoke-LiveResponseAction -Commands $commands -ActionComment $script:SessionComment)
+            Show-ActionResult (Invoke-LiveResponseAction -Commands $commands -ActionComment $script:SessionComment)
             break
         }
 
@@ -839,12 +851,15 @@ function Initialize-ConsoleInput {
         }
     } catch {
         # Not available (e.g. no console, or a host without PSReadLine): Read-Host is fine.
+        Write-Verbose "PSReadLine not used ($($_.Exception.Message)); falling back to Read-Host."
     }
 }
 
 function Restore-ConsoleInput {
     if ($null -ne $script:PrevHistorySaveStyle) {
-        try { Set-PSReadLineOption -HistorySaveStyle $script:PrevHistorySaveStyle } catch { }
+        try { Set-PSReadLineOption -HistorySaveStyle $script:PrevHistorySaveStyle } catch {
+            Write-Verbose "Could not restore PSReadLine HistorySaveStyle: $($_.Exception.Message)"
+        }
     }
 }
 
@@ -865,6 +880,9 @@ function Read-ConsoleLine {
 }
 
 function Start-Repl {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Runs the local prompt loop; the function itself changes no system state.')]
+    param()
     Write-Host ''
     Write-Status "Live Response session context established." 'Good'
     Write-Host ("  device : {0}  ({1})" -f $script:Machine.computerDnsName, $script:Machine.osPlatform)
