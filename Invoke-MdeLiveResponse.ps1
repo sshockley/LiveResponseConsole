@@ -132,6 +132,16 @@ function Get-GzipOriginalName {
     ($name -split '[\\/]')[-1]
 }
 
+function Remove-ControlCharacter {
+    <# Replaces C0/C1 control characters (except TAB, CR, LF) with U+FFFD. RunScript
+       output and gzip FNAME fields come from the endpoint, which on a compromised host is
+       attacker-controlled; raw escape sequences could otherwise rewrite the analyst's
+       terminal or forge lines in the transcript. #>
+    param([AllowNull()][AllowEmptyString()][string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return $Text }
+    [regex]::Replace($Text, '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\x80-\x9F]', [string][char]0xFFFD)
+}
+
 function Unprotect-SecureString {
     param([securestring]$Secure)
     [System.Net.NetworkCredential]::new('', $Secure).Password
@@ -470,6 +480,8 @@ function Receive-LiveResponseResult {
         $stem = '{0}_{1}_{2}' -f $script:Machine.computerDnsName, $ActionId.Substring(0, 8), $Index
         if ($isGzip) {
             $orig = Get-GzipOriginalName -Bytes $bytes
+            # FNAME is endpoint-supplied. Strip anything that is not a plain filename char.
+            if ($orig) { $orig = [regex]::Replace($orig, '[\x00-\x1f<>:"/\\|?*]', '_') }
             $leaf = if ($orig) { '{0}_{1}' -f $stem, $orig } else { $stem }
             $out = Join-Path $DownloadPath $leaf
             $in = [IO.File]::OpenRead($tmp)
@@ -498,12 +510,16 @@ function Receive-LiveResponseResult {
     }
     Remove-Item $tmp -Force
 
+    # Remove terminal escape sequences before they reach the console, the 'last' cache, or the transcript.
+    $text = Remove-ControlCharacter $text
+
     $printed = $false
     try {
         $json = $text | ConvertFrom-Json
         foreach ($field in 'script_output', 'output', 'script_errors', 'errors', 'exit_code') {
             if ($json.PSObject.Properties.Name -contains $field) {
-                $val = $json.$field
+                # Sanitize decoded JSON string
+                $val = Remove-ControlCharacter "$($json.$field)"
                 if ($null -ne $val -and "$val".Trim()) {
                     $lvl = if ($field -match 'error') { 'Bad' } else { 'Dim' }
                     if ($field -match 'output') { Write-Host $val } else { Write-Status ("  {0}: {1}" -f $field, $val) $lvl }
