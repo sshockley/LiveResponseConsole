@@ -190,6 +190,11 @@ function New-ClientAssertion {
 
 function Request-Token {
     <# Acquires a fresh token using whichever credential flow was selected. #>
+    # The env-var path converts a secret that is already plaintext in the environment into
+    # a SecureString
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '',
+        Justification = 'Wrapping an already-plaintext environment variable; no secret is introduced in source.')]
+    param()
     $tokenEndpoint = '{0}/{1}/oauth2/token' -f $script:Cfg.Authority, $TenantId
 
     switch ($script:AuthMode) {
@@ -813,13 +818,11 @@ function Invoke-ConsoleLine {
     return $true
 }
 
-
 function Write-ConsoleError {
     param([System.Management.Automation.ErrorRecord]$ErrorRecord, [string]$Line)
     Write-Status "! $($ErrorRecord.Exception.Message)" 'Bad'
     Write-Transcript @{ event = 'error'; message = $ErrorRecord.Exception.Message; input = $Line }
 }
-
 
 function Initialize-ConsoleInput {
     <# Best-effort PSReadLine so the REPL gets history, arrow keys and line editing.
@@ -905,7 +908,6 @@ function Invoke-CommandBatch {
     $ok -and ($script:FailedActions -eq 0)
 }
 
-
 #endregion
 
 #region Entry point -----------------------------------------------------------
@@ -914,6 +916,7 @@ $script:NonInteractive = $Command.Count -gt 0
 
 if (-not $DeviceName -and -not $MachineId) {
     if ($script:NonInteractive) { throw '-Command requires -DeviceName or -MachineId.' }
+    $DeviceName = Read-Host 'Device name (or machine id)'
 }
 
 $script:AuthMode = $PSCmdlet.ParameterSetName
