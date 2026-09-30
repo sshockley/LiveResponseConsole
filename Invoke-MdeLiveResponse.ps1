@@ -66,7 +66,8 @@ param(
     [string]$LogPath,
     [int]$PollIntervalSeconds = 5,
     [int]$ActionTimeoutMinutes = 15,
-    [string]$Comment = 'Live Response via Invoke-MdeLiveResponse.ps1'
+    [string]$Comment = 'Live Response via Invoke-MdeLiveResponse.ps1',
+    [string[]]$Command
 )
 
 # Deliberately 1.0, not Latest. Strict mode 2.0+ throws on references to properties the
@@ -347,6 +348,9 @@ function Resolve-MdeMachine {
 
     $active = @($hits | Sort-Object { [datetime]$_.lastSeen } -Descending)
     if ($active.Count -gt 1) {
+        if ($script:NonInteractive) {
+            throw "$($active.Count) devices match '$Name'. Use -MachineId or a more specific name when using -Command."
+        }
         Write-Status "$($active.Count) devices matched '$Name':" 'Warn'
         $i = 0
         foreach ($m in $active) {
@@ -439,6 +443,8 @@ function Show-ActionResults {
     # Not Mandatory: the callers legitimately pass $null when an action was never
     # created or never became visible, and Mandatory refuses to bind $null.
     param($Action)
+
+    if (-not $Action -or $Action.status -ne 'Succeeded') { $script:FailedActions++ }
 
     if (-not $Action) { return }
 
@@ -644,6 +650,176 @@ function Build-ChainedCommands {
     $commands
 }
 
+function Invoke-ConsoleLine {
+    <# Executes one console line, interactive or not. Returns $false when the session
+       should end (exit/quit), $true otherwise. Errors propagate to the caller, which
+       decides whether to log-and-continue (REPL) or fail the run (-Command). Cases that
+       produce pipeline output go through Out-Host so the return value stays a clean bool. #>
+    param([string]$Line)
+
+    if ([string]::IsNullOrWhiteSpace($Line)) { return $true }
+
+    $tokens = @(Split-CommandLine $Line)
+    $verb = ([string]$tokens[0]).ToLower()
+    $rest = if ($tokens.Count -gt 1) { ($tokens[1..($tokens.Count - 1)] -join ' ') } else { '' }
+    # $rest has been through the tokenizer, which strips quotes. Verbs that forward
+    # free text to the endpoint need the line exactly as typed.
+    $rawRest = if ($Line -match '^\s*\S+\s+(.+)$') { $Matches[1].Trim() } else { '' }
+
+    switch ($verb) {
+        { $_ -in 'exit', 'quit' } {
+            Write-Status 'Closing local session. Queued actions continue server-side.' 'Dim'
+            return $false
+        }
+        'help' { Show-Help | Out-Host; break }
+
+        'machine' {
+            $script:Machine | Select-Object computerDnsName, id, osPlatform, version, healthStatus,
+                riskScore, exposureLevel, lastIpAddress, lastExternalIpAddress, lastSeen, rbacGroupName |
+                Format-List | Out-Host
+            break
+        }
+
+        'open' {
+            if (-not $rest) { Write-Status 'Usage: open <deviceName|machineId>' 'Warn'; break }
+            $script:Machine = if ($rest -match '^(?i)[0-9a-f]{40}$') {
+                Resolve-MdeMachine -Id $rest
+            } else {
+                Resolve-MdeMachine -Name $rest
+            }
+            Write-Status "Now targeting $($script:Machine.computerDnsName)" 'Good'
+            break
+        }
+
+        'comment' {
+            if ($rawRest) { $script:SessionComment = $rawRest; Write-Status "Comment set." 'Good' }
+            else { Write-Host $script:SessionComment }
+            break
+        }
+
+        'result' {
+            # Re-fetch a past action's output. Useful after a permissions fix, or
+            # when the local session dropped while the action kept running.
+            $parts = @(Split-CommandLine $rest)
+            if (-not $parts) { Write-Status 'Usage: result <actionId> [index]' 'Warn'; break }
+            $aid = $parts[0]
+            $idx = if ($parts.Count -gt 1 -and $parts[1] -match '^\d+$') { [int]$parts[1] } else { 0 }
+
+            $act = Invoke-MdeApi -Path "api/machineactions/$aid"
+            $ctype = 'RunScript'
+            if ($act.PSObject.Properties.Name -contains 'commands' -and $act.commands) {
+                $c = @($act.commands)[$idx]
+                if ($c) { $ctype = $c.command.type }
+            }
+            Write-Status "  $($act.status), command $idx is $ctype" 'Dim'
+
+            $link = (Invoke-MdeApi -Path "api/machineactions/$aid/GetLiveResponseResultDownloadLink(index=$idx)").value
+            Receive-LiveResponseResult -Url $link -CommandType $ctype -ActionId $aid -Index $idx
+            break
+        }
+
+        'last' {
+            if ($script:LastResult) { Write-Host $script:LastResult } else { Write-Status 'No result cached.' 'Warn' }
+            break
+        }
+
+        'actions' {
+            $take = if ($rest -match '^\d+$') { [int]$rest } else { 10 }
+            $filter = [uri]::EscapeDataString("machineId eq '$($script:Machine.id)'")
+            # The list API documents $filter and $top but not $orderby, so the
+            # server's ordering is not guaranteed. Over-fetch and sort locally.
+            $fetch = [Math]::Max(100, $take)
+            @((Invoke-MdeApi -Path "api/machineactions?`$filter=$filter&`$top=$fetch").value) |
+                Sort-Object { [datetime]$_.creationDateTimeUtc } -Descending |
+                Select-Object -First $take |
+                Select-Object id, type, status, requestor, creationDateTimeUtc |
+                Format-Table -AutoSize | Out-Host
+            break
+        }
+
+        'cancel' {
+            $parts = @(Split-CommandLine $rest)
+            if (-not $parts) { Write-Status 'Usage: cancel <actionId> [comment]' 'Warn'; break }
+            $c = if ($parts.Count -gt 1) { ($parts[1..($parts.Count - 1)] -join ' ') } else { 'Cancelled by analyst' }
+            Invoke-MdeApi -Method POST -Path "api/machineactions/$($parts[0])/cancel" -Body @{ Comment = $c } | Out-Null
+            Write-Status 'Cancellation requested.' 'Good'
+            break
+        }
+
+        'library' {
+            $parts = @(Split-CommandLine $rest)
+            $sub = if ($parts.Count -gt 0) { ([string]$parts[0]).ToLower() } else { 'list' }
+            switch ($sub) {
+                'upload' {
+                    if ($parts.Count -lt 2) { Write-Status 'Usage: library upload <path> [description]' 'Warn'; break }
+                    $file = (Resolve-Path -LiteralPath $parts[1]).Path
+                    $desc = if ($parts.Count -gt 2) { ($parts[2..($parts.Count - 1)] -join ' ') } else { 'Uploaded by Invoke-MdeLiveResponse.ps1' }
+                    # Only scripts take parameters. Binaries staged via 'put' do not,
+                    # and advertising parameters on them misleads the portal UI.
+                    $isScript = [IO.Path]::GetExtension($file) -in '.ps1', '.psm1'
+                    $form = @{
+                        file             = Get-Item -LiteralPath $file
+                        Description      = $desc
+                        HasParameters    = if ($isScript) { 'true' } else { 'false' }
+                        OverrideIfExists = 'true'
+                    }
+                    if ($isScript) { $form.ParametersDescription = 'Passed through the Args parameter' }
+                    Invoke-MdeApi -Method POST -Path 'api/libraryfiles' -Form $form | Out-Null
+                    Write-Status "Uploaded $(Split-Path $file -Leaf) to the tenant library." 'Good'
+                }
+                'delete' {
+                    if ($parts.Count -lt 2) { Write-Status 'Usage: library delete <fileName>' 'Warn'; break }
+                    $target = [uri]::EscapeDataString($parts[1])
+                    Invoke-MdeApi -Method DELETE -Path "api/libraryfiles/$target" | Out-Null
+                    Write-Status "Deleted $($parts[1])." 'Good'
+                }
+                default {
+                    (Invoke-MdeApi -Path 'api/libraryfiles').value |
+                        Select-Object fileName, hasParameters, createdBy, lastUpdatedTime, description |
+                        Format-Table -AutoSize | Out-Host
+                }
+            }
+            break
+        }
+
+        'cmd' {
+            if (-not $rawRest) { Write-Status 'Usage: cmd <powershell expression>' 'Warn'; break }
+            $commands = @(@{
+                type   = 'RunScript'
+                params = @(
+                    @{ key = 'ScriptName'; value = $CommandWrapperScript },
+                    @{ key = 'Args'; value = $rawRest }
+                )
+            })
+            Show-ActionResults (Invoke-LiveResponseAction -Commands $commands -ActionComment $script:SessionComment)
+            break
+        }
+
+        { $_ -in 'run', 'get', 'put' } {
+            # Normalize "run X args --get Y" into the chained form. Use the raw text
+            # so quotes survive to Build-ChainedCommands, which needs them to tell a
+            # literal "--get" argument from the chain separator.
+            $normalized = '--{0} {1}' -f $verb, $rawRest
+            $commands = @(Build-ChainedCommands $normalized)
+            if (-not $commands) { Write-Status 'Nothing to submit.' 'Warn'; break }
+            Show-ActionResults (Invoke-LiveResponseAction -Commands $commands -ActionComment $script:SessionComment)
+            break
+        }
+
+        default {
+            Write-Status "Unknown command '$verb'. The API has no shell passthrough -- use 'cmd <powershell>' or 'help'." 'Warn'
+        }
+    }
+    return $true
+}
+
+
+function Write-ConsoleError {
+    param([System.Management.Automation.ErrorRecord]$ErrorRecord, [string]$Line)
+    Write-Status "! $($ErrorRecord.Exception.Message)" 'Bad'
+    Write-Transcript @{ event = 'error'; message = $ErrorRecord.Exception.Message; input = $Line }
+}
+
 function Start-Repl {
     Write-Host ''
     Write-Status "Live Response session context established." 'Good'
@@ -658,171 +834,48 @@ function Start-Repl {
         $prompt = '{0}> ' -f $script:Machine.computerDnsName
         Write-Host $prompt -NoNewline -ForegroundColor Cyan
         $line = Read-Host
-        if ([string]::IsNullOrWhiteSpace($line)) { continue }
-
-        $tokens = @(Split-CommandLine $line)
-        $verb = ([string]$tokens[0]).ToLower()
-        $rest = if ($tokens.Count -gt 1) { ($tokens[1..($tokens.Count - 1)] -join ' ') } else { '' }
-        # $rest has been through the tokenizer, which strips quotes. Verbs that forward
-        # free text to the endpoint need the line exactly as typed.
-        $rawRest = if ($line -match '^\s*\S+\s+(.+)$') { $Matches[1].Trim() } else { '' }
-
         try {
-            switch ($verb) {
-                { $_ -in 'exit', 'quit' } { Write-Status 'Closing local session. Queued actions continue server-side.' 'Dim'; return }
-                'help' { Show-Help; continue }
-
-                'machine' {
-                    $script:Machine | Select-Object computerDnsName, id, osPlatform, version, healthStatus,
-                        riskScore, exposureLevel, lastIpAddress, lastExternalIpAddress, lastSeen, rbacGroupName |
-                        Format-List
-                    continue
-                }
-
-                'open' {
-                    if (-not $rest) { Write-Status 'Usage: open <deviceName|machineId>' 'Warn'; continue }
-                    $script:Machine = if ($rest -match '^(?i)[0-9a-f]{40}$') {
-                        Resolve-MdeMachine -Id $rest
-                    } else {
-                        Resolve-MdeMachine -Name $rest
-                    }
-                    Write-Status "Now targeting $($script:Machine.computerDnsName)" 'Good'
-                    continue
-                }
-
-                'comment' {
-                    if ($rawRest) { $script:SessionComment = $rawRest; Write-Status "Comment set." 'Good' }
-                    else { Write-Host $script:SessionComment }
-                    continue
-                }
-
-                'result' {
-                    # Re-fetch a past action's output. Useful after a permissions fix, or
-                    # when the local session dropped while the action kept running.
-                    $parts = @(Split-CommandLine $rest)
-                    if (-not $parts) { Write-Status 'Usage: result <actionId> [index]' 'Warn'; continue }
-                    $aid = $parts[0]
-                    $idx = if ($parts.Count -gt 1 -and $parts[1] -match '^\d+$') { [int]$parts[1] } else { 0 }
-
-                    $act = Invoke-MdeApi -Path "api/machineactions/$aid"
-                    $ctype = 'RunScript'
-                    if ($act.PSObject.Properties.Name -contains 'commands' -and $act.commands) {
-                        $c = @($act.commands)[$idx]
-                        if ($c) { $ctype = $c.command.type }
-                    }
-                    Write-Status "  $($act.status), command $idx is $ctype" 'Dim'
-
-                    $link = (Invoke-MdeApi -Path "api/machineactions/$aid/GetLiveResponseResultDownloadLink(index=$idx)").value
-                    Receive-LiveResponseResult -Url $link -CommandType $ctype -ActionId $aid -Index $idx
-                    continue
-                }
-
-                'last' {
-                    if ($script:LastResult) { Write-Host $script:LastResult } else { Write-Status 'No result cached.' 'Warn' }
-                    continue
-                }
-
-                'actions' {
-                    $take = if ($rest -match '^\d+$') { [int]$rest } else { 10 }
-                    $filter = [uri]::EscapeDataString("machineId eq '$($script:Machine.id)'")
-                    # Grab everything and sort locally
-                    $fetch = [Math]::Max(100, $take)
-                    @((Invoke-MdeApi -Path "api/machineactions?`$filter=$filter&`$top=$fetch").value) |
-                        Sort-Object { [datetime]$_.creationDateTimeUtc } -Descending |
-                        Select-Object -First $take |
-                        Select-Object id, type, status, requestor, creationDateTimeUtc | Format-Table -AutoSize
-                    continue
-                }
-
-                    'cancel' {
-                    $parts = @(Split-CommandLine $rest)
-                    if (-not $parts) { Write-Status 'Usage: cancel <actionId> [comment]' 'Warn'; continue }
-                    $c = if ($parts.Count -gt 1) { ($parts[1..($parts.Count - 1)] -join ' ') } else { 'Cancelled by analyst' }
-                    Invoke-MdeApi -Method POST -Path "api/machineactions/$($parts[0])/cancel" -Body @{ Comment = $c } | Out-Null
-                    Write-Status 'Cancellation requested.' 'Good'
-                    continue
-                }
-
-                'library' {
-                    $parts = @(Split-CommandLine $rest)
-                    $sub = if ($parts.Count -gt 0) { ([string]$parts[0]).ToLower() } else { 'list' }
-                    switch ($sub) {
-                        'upload' {
-                            if ($parts.Count -lt 2) { Write-Status 'Usage: library upload <path> [description]' 'Warn'; continue }
-                            $file = (Resolve-Path -LiteralPath $parts[1]).Path
-                            $desc = if ($parts.Count -gt 2) { ($parts[2..($parts.Count - 1)] -join ' ') } else { 'Uploaded by Invoke-MdeLiveResponse.ps1' }
-                            $isScript = [IO.Path]::GetExtension($file) -in '.ps1', '.psm1'
-                            $form = @{
-                                file             = Get-Item -LiteralPath $file
-                                Description      = $desc
-                                HasParameters    = if ($isScript) { 'true' } else { 'false' }
-                                OverrideIfExists = 'true'
-                            }
-                            if ($isScript) { $form.ParametersDescription = 'Passed through the Args parameter' }
-                            Invoke-MdeApi -Method POST -Path 'api/libraryfiles' -Form $form | Out-Null
-                            Write-Status "Uploaded $(Split-Path $file -Leaf) to the tenant library." 'Good'
-                        }
-                        'delete' {
-                            if ($parts.Count -lt 2) { Write-Status 'Usage: library delete <fileName>' 'Warn'; continue }
-                            $target = [uri]::EscapeDataString($parts[1])
-                            Invoke-MdeApi -Method DELETE -Path "api/libraryfiles/$target" | Out-Null
-                            Write-Status "Deleted $($parts[1])." 'Good'
-                        }
-                        default {
-                            (Invoke-MdeApi -Path 'api/libraryfiles').value |
-                                Select-Object fileName, hasParameters, createdBy, lastUpdatedTime, description |
-                                Format-Table -AutoSize
-                        }
-                    }
-                    continue
-                }
-
-                'cmd' {
-                    if (-not $rawRest) { Write-Status 'Usage: cmd <powershell expression>' 'Warn'; continue }
-                    $commands = @(@{
-                        type   = 'RunScript'
-                        params = @(
-                            @{ key = 'ScriptName'; value = $CommandWrapperScript },
-                            @{ key = 'Args'; value = $rawRest }
-                        )
-                    })
-                    Show-ActionResults (Invoke-LiveResponseAction -Commands $commands -ActionComment $script:SessionComment)
-                    continue
-                }
-
-                { $_ -in 'run', 'get', 'put' } {
-                    # Normalize "run X args --get Y" into the chained form. Use the raw text
-                    # so quotes survive to Build-ChainedCommands, which needs them to tell a
-                    # literal "--get" argument from the chain separator.
-                    $normalized = '--{0} {1}' -f $verb, $rawRest
-                    $commands = @(Build-ChainedCommands $normalized)
-                    if (-not $commands) { Write-Status 'Nothing to submit.' 'Warn'; continue }
-                    Show-ActionResults (Invoke-LiveResponseAction -Commands $commands -ActionComment $script:SessionComment)
-                    continue
-                }
-
-                default {
-                    Write-Status "Unknown command '$verb'. The API has no shell passthrough -- use 'cmd <powershell>' or 'help'." 'Warn'
-                }
-            }
-        } catch {
-            Write-Status "! $($_.Exception.Message)" 'Bad'
-            Write-Transcript @{ event = 'error'; message = $_.Exception.Message; input = $line }
+            if (-not (Invoke-ConsoleLine $line)) { return }
+    } catch {
+            Write-ConsoleError -ErrorRecord $_ -Line $line
         }
     }
 }
+
+function Invoke-CommandBatch {
+    <# Non-interactive mode: runs each -Command line in order and returns $true only if
+       every line completed without a local error and every submitted action reached
+       Succeeded. A failing line does not stop the remaining lines, same as the REPL. #>
+    param([string[]]$Lines)
+
+    $ok = $true
+    foreach ($line in $Lines) {
+        Write-Host ('{0}> {1}' -f $script:Machine.computerDnsName, $line) -ForegroundColor Cyan
+        try {
+            if (-not (Invoke-ConsoleLine $line)) { break }
+        } catch {
+            $ok = $false
+            Write-ConsoleError -ErrorRecord $_ -Line $line
+        }
+    }
+    $ok -and ($script:FailedActions -eq 0)
+}
+
 
 #endregion
 
 #region Entry point -----------------------------------------------------------
 
+$script:NonInteractive = $Command.Count -gt 0
+
 if (-not $DeviceName -and -not $MachineId) {
-    $DeviceName = Read-Host 'Device name (or machine id)'
+    if ($script:NonInteractive) { throw '-Command requires -DeviceName or -MachineId.' }
 }
 
 $script:AuthMode = $PSCmdlet.ParameterSetName
 $script:SessionComment = $Comment
 $script:LastResult = $null
+$script:FailedActions = 0
 $script:LogFile = if ($LogPath) { $LogPath } else {
     Join-Path (Get-Location) ('lr-session-{0}.jsonl' -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
 }
@@ -837,7 +890,15 @@ if ($script:Machine.healthStatus -ne 'Active') {
     Write-Status "Device health is '$($script:Machine.healthStatus)'. Actions will queue until it checks in (up to 3 days)." 'Warn'
 }
 
-Write-Transcript @{ event = 'session_start'; machine = $script:Machine.computerDnsName; machineId = $script:Machine.id; cloud = $Cloud }
+$mode = if ($script:NonInteractive) { 'command' } else { 'interactive' }
+Write-Transcript @{ event = 'session_start'; machine = $script:Machine.computerDnsName; machineId = $script:Machine.id; cloud = $Cloud; mode = $mode }
+
+if ($script:NonInteractive) {
+    $succeeded = Invoke-CommandBatch -Lines $Command
+    Write-Transcript @{ event = 'session_end'; succeeded = $succeeded }
+    exit $(if ($succeeded) { 0 } else { 1 })
+}
+
 Start-Repl
 Write-Transcript @{ event = 'session_end' }
 

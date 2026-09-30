@@ -64,9 +64,27 @@ $pfxPwd = Read-Host 'PFX password' -AsSecureString
 
 ## Parameters
 
-Clouds: `-Cloud Commercial|UsGovGcc|UsGovGccHigh|UsGovDoD`. Override the host with `-ApiBaseUri https://eu.api.security.microsoft.com` for lower latency. Verify gov hostnames against current docs as they can change.
+Clouds: `-Cloud Commercial|UsGovGcc|UsGovGccHigh|UsGovDoD`. Override the host with `-ApiBaseUri https://eu.api.security.microsoft.com` for lower latency. Verify gov host names against current docs as they can change.
 
-Other parameters: `-MachineId`, `-DownloadPath`, `-LogPath`, `-PollIntervalSeconds`, `-ActionTimeoutMinutes`, `-Comment`, `-CommandWrapperScript`.
+Other parameters: `-MachineId`, `-DownloadPath`, `-LogPath`, `-PollIntervalSeconds`, `-ActionTimeoutMinutes`, `-Comment`, `-CommandWrapperScript`, `-Command`.
+
+## Non-interactive mode
+
+Pass `-Command` with one or more commands to run (in order) in one request.
+
+```powershell
+./Invoke-MdeLiveResponse.ps1 -TenantId $tid -ClientId $cid -DeviceName ws-eng-042 `
+    -CertificatePath ./lr-app.pfx -CertificatePassword $pfxPwd `
+    -Command 'comment Case 4711 triage',
+             'run Collect-Artifacts.ps1 --get C:\Windows\Temp\out.zip',
+             'cmd Get-Process | Sort-Object CPU -Descending | Select-Object -First 10'
+```
+
+- Exit code is `0` if every line ran without a local error and every submitted action
+  reached `Succeeded`, otherwise `1`. A failing line does not stop the remaining lines.
+- `-DeviceName` or `-MachineId` is required. An ambiguous device name is an error rather
+  than a prompt.
+- The transcript is written as usual; `session_start` carries `mode: command`.
 
 Read `Invoke-LRCommand.ps1` before uploading. It executes arbitrary strings as SYSTEM on the endpoint. That widens what any holder of `Machine.LiveResponse` can do, compared with a library
 of narrow, purpose-built scripts.
