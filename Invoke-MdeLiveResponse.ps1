@@ -674,9 +674,9 @@ function Receive-LiveResponseResult {
                     foreach ($s in $fs, $gz, $in) { if ($s) { $s.Dispose() } }
                 }
                 if ($extracted) {
-                    Write-Status "  collected -> $out ($([math]::Round((Get-Item -LiteralPath $out).Length/1KB,1)) KB, ungzipped)" 'Good'
+                    Write-Status "  collected -> $out ($([math]::Round([IO.FileInfo]::new($out).Length/1KB,1)) KB, ungzipped)" 'Good'
                 } else {
-                    Remove-Item -LiteralPath $out -Force
+                    [IO.File]::Delete($out)
                     $out = "$out.gz"
                     Copy-Item -LiteralPath $tmp $out -Force
                     Write-Status "  ungzipped size exceeds -MaxExtractGB $MaxExtractGB; kept as received -> $out" 'Warn'
@@ -688,9 +688,11 @@ function Receive-LiveResponseResult {
             }
 
             # Hash what was written to disk so the transcript can stand as evidence that the
-            # file examined later is the file that was collected.
+            # file examined later is the file that was collected. Sizes come from .NET rather
+            # than Get-Item, which on Linux fails to find a name starting with '..' (a
+            # sanitized device name can).
             $sha256 = (Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToLower()
-            $length = (Get-Item -LiteralPath $out).Length
+            $length = [IO.FileInfo]::new($out).Length
             Write-Status "  sha256 $sha256" 'Dim'
             if ($extracted) { Write-Status "  sha256 $rawSha256 (as received)" 'Dim' }
             Write-Transcript @{
