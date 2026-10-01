@@ -53,6 +53,9 @@ param(
     [Parameter(ParameterSetName = 'Certificate', Mandatory)][string]$CertificatePath,
     [Parameter(ParameterSetName = 'Certificate')][securestring]$CertificatePassword,
 
+    # App-only with a certificate from the CurrentUser or LocalMachine 'My' store.
+    [Parameter(ParameterSetName = 'Thumbprint', Mandatory)][string]$CertificateThumbprint,
+
     # Delegated sign-in. Needs a browser on some device to enter the code.
     [Parameter(ParameterSetName = 'DeviceCode', Mandatory)][switch]$UseDeviceCode,
 
@@ -218,6 +221,25 @@ function New-ClientAssertion {
     '{0}.{1}' -f $unsigned, (ConvertTo-Base64Url $sig)
 }
 
+function Get-StoreCertificate {
+    <# Finds a certificate by thumbprint in CurrentUser\My, then LocalMachine\My. #>
+    param([string]$Thumbprint)
+    $tp = $Thumbprint -replace '[\s:]', ''
+    foreach ($location in 'CurrentUser', 'LocalMachine') {
+        $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('My', $location)
+        try {
+            $store.Open('ReadOnly, OpenExistingOnly')
+            $found = $store.Certificates.Find('FindByThumbprint', $tp, $false)
+            if ($found.Count -gt 0) { return $found[0] }
+        } catch {
+            Write-Verbose "Could not search $location\My: $($_.Exception.Message)"
+        } finally {
+            $store.Dispose()
+        }
+    }
+    throw "Certificate $tp not found in CurrentUser\My or LocalMachine\My."
+}
+
 function Request-Token {
     <# Acquires a fresh token using whichever credential flow was selected. #>
     # The env-var path converts a secret that is already plaintext in the environment into
@@ -228,15 +250,19 @@ function Request-Token {
     $tokenEndpoint = '{0}/{1}/oauth2/token' -f $script:Cfg.Authority, $TenantId
 
     switch ($script:AuthMode) {
-        'Certificate' {
-            $certPlain = if ($CertificatePassword) { Unprotect-SecureString $CertificatePassword } else { $null }
-            $certFile = (Resolve-Path -LiteralPath $CertificatePath).Path
-            $keyFlags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
-            $loader = 'System.Security.Cryptography.X509Certificates.X509CertificateLoader' -as [type]
-            $cert = if ($loader) {
-                $loader::LoadPkcs12FromFile($certFile, $certPlain, $keyFlags)
+        { $_ -in 'Certificate', 'Thumbprint' } {
+            $cert = if ($script:AuthMode -eq 'Thumbprint') {
+                Get-StoreCertificate -Thumbprint $CertificateThumbprint
             } else {
-                [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($certFile, $certPlain, $keyFlags)
+                $certPlain = if ($CertificatePassword) { Unprotect-SecureString $CertificatePassword } else { $null }
+                $certFile = (Resolve-Path -LiteralPath $CertificatePath).Path
+                $keyFlags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
+                $loader = 'System.Security.Cryptography.X509Certificates.X509CertificateLoader' -as [type]
+                if ($loader) {
+                    $loader::LoadPkcs12FromFile($certFile, $certPlain, $keyFlags)
+                } else {
+                    [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($certFile, $certPlain, $keyFlags)
+                }
             }
             $body = @{
                 grant_type            = 'client_credentials'

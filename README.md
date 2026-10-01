@@ -55,6 +55,10 @@ $pfxPwd = Read-Host 'PFX password' -AsSecureString
 ./Invoke-MdeLiveResponse.ps1 -TenantId $tid -ClientId $cid `
     -CertificatePath ./lr-app.pfx -CertificatePassword $pfxPwd -DeviceName ws-eng-042
 
+# Certificate from the CurrentUser or LocalMachine 'My' store
+./Invoke-MdeLiveResponse.ps1 -TenantId $tid -ClientId $cid `
+    -CertificateThumbprint <thumbprint> -DeviceName ws-eng-042
+
 # Secret from environment
 $env:MDE_CLIENT_SECRET = '...'   # or omit and be prompted
 ./Invoke-MdeLiveResponse.ps1 -TenantId $tid -ClientId $cid -DeviceName ws-eng-042

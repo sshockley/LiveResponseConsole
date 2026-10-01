@@ -57,8 +57,8 @@ icacls .\lr-app.pfx /inheritance:r /grant:r "$($env:USERNAME):(R)"
 Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)"
 ```
 
-Keep the last step if you want the file to be the single copy of the credential. Skip it if you would rather load from the store, which takes a small edit to the script's `Certificate` parameter
-set since it currently accepts a file path only.
+Keep the last step if you want the file to be the single copy of the credential. Skip it if you would rather load from the store with `-CertificateThumbprint $cert.Thumbprint` instead of
+`-CertificatePath`; then the `.pfx` is only a backup.
 
 `-CryptoAlgorithmOption AES256_SHA256` avoids the legacy TripleDES default. Remove that parameter if you're running from Windows Server 2012 R2 and earlier.
 
