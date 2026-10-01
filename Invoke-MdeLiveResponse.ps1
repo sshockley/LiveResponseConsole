@@ -746,6 +746,7 @@ function Show-Help {
     library                       list library files
     library upload <path> [desc]  upload a script/tool to the tenant LR library
     library delete <fileName>     remove a library file
+                                  (both ask before changing an existing file; --force skips)
 
   Execution
     run <ScriptName> [args]       RunScript from the library (10 min cap)
@@ -832,6 +833,15 @@ function Write-Usage {
     param([string]$Message)
     if ($script:NonInteractive) { throw $Message }
     Write-Status $Message 'Warn'
+}
+
+function Confirm-Action {
+    <# Asks y/N at the prompt. Under -Command there is nobody to ask, so the line must
+       carry --force instead. #>
+    param([string]$Prompt, [switch]$Force)
+    if ($Force) { return $true }
+    if ($script:NonInteractive) { throw "$Prompt Add --force to confirm under -Command." }
+    (Read-Host "$Prompt [y/N]") -match '^\s*y(es)?\s*$'
 }
 
 function Invoke-ConsoleLine {
@@ -934,12 +944,22 @@ function Invoke-ConsoleLine {
 
         'library' {
             $parts = @(Split-CommandLine $rest)
+            $force = $parts -contains '--force'
+            $parts = @($parts | Where-Object { $_ -ne '--force' })
             $sub = if ($parts.Count -gt 0) { ([string]$parts[0]).ToLower() } else { 'list' }
             switch ($sub) {
                 'upload' {
-                    if ($parts.Count -lt 2) { Write-Usage 'Usage: library upload <path> [description]'; break }
+                    if ($parts.Count -lt 2) { Write-Usage 'Usage: library upload <path> [description] [--force]'; break }
                     $file = (Resolve-Path -LiteralPath $parts[1]).Path
                     $desc = if ($parts.Count -gt 2) { ($parts[2..($parts.Count - 1)] -join ' ') } else { 'Uploaded by Invoke-MdeLiveResponse.ps1' }
+                    # The library is tenant-wide, so an overwrite can replace a teammate's script.
+                    $leafName = Split-Path $file -Leaf
+                    $exists = @((Invoke-MdeApi -Path 'api/libraryfiles').value |
+                        Where-Object { $_.fileName -ieq $leafName }).Count -gt 0
+                    if ($exists -and -not (Confirm-Action "Library file '$leafName' already exists. Overwrite it for the whole tenant?" -Force:$force)) {
+                        Write-Status 'Upload cancelled.' 'Warn'
+                        break
+                    }
                     # Only scripts take parameters. Binaries staged via 'put' do not,
                     # and advertising parameters on them misleads the portal UI.
                     $isScript = [IO.Path]::GetExtension($file) -in '.ps1', '.psm1'
@@ -947,7 +967,7 @@ function Invoke-ConsoleLine {
                         file             = Get-Item -LiteralPath $file
                         Description      = $desc
                         HasParameters    = if ($isScript) { 'true' } else { 'false' }
-                        OverrideIfExists = 'true'
+                        OverrideIfExists = if ($exists) { 'true' } else { 'false' }
                     }
                     if ($isScript) { $form.ParametersDescription = 'Passed through the Args parameter' }
                     Invoke-MdeApi -Method POST -Path 'api/libraryfiles' -Form $form | Out-Null
@@ -960,7 +980,11 @@ function Invoke-ConsoleLine {
                     Write-Status "Uploaded $(Split-Path $file -Leaf) to the tenant library." 'Good'
                 }
                 'delete' {
-                    if ($parts.Count -lt 2) { Write-Usage 'Usage: library delete <fileName>'; break }
+                    if ($parts.Count -lt 2) { Write-Usage 'Usage: library delete <fileName> [--force]'; break }
+                    if (-not (Confirm-Action "Delete library file '$($parts[1])' for the whole tenant?" -Force:$force)) {
+                        Write-Status 'Delete cancelled.' 'Warn'
+                        break
+                    }
                     $target = [uri]::EscapeDataString($parts[1])
                     Invoke-MdeApi -Method DELETE -Path "api/libraryfiles/$target" | Out-Null
                     Write-Transcript @{ event = 'library_delete'; fileName = $parts[1] }

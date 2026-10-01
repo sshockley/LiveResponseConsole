@@ -24,7 +24,7 @@ BeforeAll {
     }
 
     foreach ($name in 'Invoke-MdeApi', 'Invoke-ConsoleLine', 'Split-CommandLine', 'Build-ChainedCommand', 'Write-Usage',
-        'Request-Token') {
+        'Request-Token', 'Confirm-Action') {
         $fn = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -218,6 +218,53 @@ Describe 'Invoke-ConsoleLine' {
     It 'throws on an unknown verb under -Command' {
         $script:NonInteractive = $true
         { Invoke-ConsoleLine 'dir' } | Should -Throw "Unknown command 'dir'*"
+    }
+
+    Context 'library' {
+        BeforeEach {
+            $script:Upload = Join-Path $TestDrive 'Tool.ps1'
+            Set-Content -LiteralPath $script:Upload -Value 'Write-Output 1'
+            $script:Existing = @()
+            Mock Invoke-MdeApi -ParameterFilter { $Method -ne 'POST' -and $Method -ne 'DELETE' } {
+                [pscustomobject]@{ value = @($script:Existing | ForEach-Object { [pscustomobject]@{ fileName = $_ } }) }
+            }
+            Mock Invoke-MdeApi -ParameterFilter { $Method -in 'POST', 'DELETE' } {}
+            Mock Write-Transcript {}
+        }
+
+        It 'uploads a new file without asking and without overriding' {
+            Mock Read-Host { throw 'should not ask' }
+            Invoke-ConsoleLine "library upload `"$script:Upload`"" | Out-Null
+            Should -Invoke Invoke-MdeApi -Times 1 -ParameterFilter { $Method -eq 'POST' -and $Form.OverrideIfExists -eq 'false' }
+        }
+
+        It 'refuses to overwrite under -Command without --force' {
+            $script:NonInteractive = $true
+            $script:Existing = @('tool.ps1')
+            { Invoke-ConsoleLine "library upload `"$script:Upload`"" } | Should -Throw '*--force*'
+            Should -Invoke Invoke-MdeApi -Times 0 -ParameterFilter { $Method -eq 'POST' }
+        }
+
+        It 'overwrites with --force' {
+            $script:NonInteractive = $true
+            $script:Existing = @('Tool.ps1')
+            Invoke-ConsoleLine "library upload `"$script:Upload`" new build --force" | Out-Null
+            Should -Invoke Invoke-MdeApi -Times 1 -ParameterFilter {
+                $Method -eq 'POST' -and $Form.OverrideIfExists -eq 'true' -and $Form.Description -eq 'new build'
+            }
+        }
+
+        It 'does not delete when the prompt is declined' {
+            Mock Read-Host { 'n' }
+            Invoke-ConsoleLine 'library delete Tool.ps1' | Out-Null
+            Should -Invoke Invoke-MdeApi -Times 0 -ParameterFilter { $Method -eq 'DELETE' }
+        }
+
+        It 'deletes when the prompt is accepted' {
+            Mock Read-Host { 'y' }
+            Invoke-ConsoleLine 'library delete Tool.ps1' | Out-Null
+            Should -Invoke Invoke-MdeApi -Times 1 -ParameterFilter { $Method -eq 'DELETE' -and $Path -eq 'api/libraryfiles/Tool.ps1' }
+        }
     }
 
     It 'throws on a usage error under -Command' {

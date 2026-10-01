@@ -86,7 +86,8 @@ Pass `-Command` with one or more commands to run (in order) in one request.
 
 - Exit code is `0` if every line ran without a local error and every submitted action
   reached `Succeeded`, otherwise `1`. A failing line does not stop the remaining lines.
-  Unknown verbs and usage errors count as failures.
+  Unknown verbs and usage errors count as failures. `library upload` over an existing file
+  and `library delete` need `--force`, since there is no prompt to confirm them.
 - `-DeviceName` or `-MachineId` is required. An ambiguous device name is an error rather
   than a prompt.
 - The transcript is written as usual; `session_start` carries `mode: command`.
@@ -108,8 +109,8 @@ result <actionId> [index]      re-fetch the output of any past action
 help | exit
 
 library                        list library files
-library upload <path> [desc]
-library delete <fileName>
+library upload <path> [desc] [--force]   asks before overwriting an existing file
+library delete <fileName> [--force]      asks before deleting
 
 run <ScriptName> [args]        RunScript from library
 cmd <powershell>               arbitrary PowerShell via the wrapper
