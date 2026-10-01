@@ -24,7 +24,7 @@ BeforeAll {
     }
 
     foreach ($name in 'Invoke-MdeApi', 'Invoke-ConsoleLine', 'Split-CommandLine', 'Build-ChainedCommand', 'Write-Usage',
-        'Request-Token', 'Confirm-Action') {
+        'Request-Token', 'Confirm-Action', 'Resolve-MdeMachine', 'Get-StoreCertificate') {
         $fn = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -51,6 +51,84 @@ BeforeAll {
     $CommandWrapperScript = 'Invoke-LRCommand.ps1'
     $TenantId = 'tenant'
     $ClientId = 'client'
+}
+
+Describe 'Resolve-MdeMachine' {
+    BeforeEach {
+        Mock Write-Status {}
+        Mock Write-Host {}
+        $script:NonInteractive = $false
+        $script:Hits = @()
+        Mock Invoke-MdeApi { [pscustomobject]@{ value = $script:Hits } }
+    }
+
+    BeforeAll {
+        function New-Machine([string]$Name, $LastSeen) {
+            [pscustomobject]@{ computerDnsName = $Name; id = "id-$Name"; lastSeen = $LastSeen; osPlatform = 'Windows11'; healthStatus = 'Active' }
+        }
+    }
+
+    It 'throws when nothing matches' {
+        { Resolve-MdeMachine -Name 'nope' } | Should -Throw "No onboarded device matches 'nope'."
+    }
+
+    It 'escapes a single quote in the OData filter' {
+        $script:Hits = @(New-Machine "o'brien-pc" (Get-Date))
+        Resolve-MdeMachine -Name "O'Brien-PC" | Out-Null
+        Should -Invoke Invoke-MdeApi -ParameterFilter { [uri]::UnescapeDataString($Path) -like "*'o''brien-pc'*" }
+    }
+
+    It 'prefers an exact short-hostname match over longer prefix matches' {
+        Mock Read-Host { throw 'should not ask' }
+        $script:Hits = @(
+            (New-Machine 'ws-eng-042.corp.example.com' (Get-Date)),
+            (New-Machine 'ws-eng-04.corp.example.com' (Get-Date).AddDays(-3))
+        )
+        (Resolve-MdeMachine -Name 'WS-ENG-04').computerDnsName | Should -Be 'ws-eng-04.corp.example.com'
+    }
+
+    It 'tolerates a device that has never reported lastSeen' {
+        Mock Read-Host { '0' }
+        $script:Hits = @((New-Machine 'a1' $null), (New-Machine 'a2' (Get-Date)))
+        (Resolve-MdeMachine -Name 'a').computerDnsName | Should -Be 'a2'
+    }
+
+    It 'lists newest first and returns the picked index' {
+        Mock Read-Host { '1' }
+        $script:Hits = @((New-Machine 'a1' (Get-Date).AddDays(-1)), (New-Machine 'a2' (Get-Date)))
+        (Resolve-MdeMachine -Name 'a').computerDnsName | Should -Be 'a1'
+    }
+
+    It 'throws on an out-of-range pick' {
+        Mock Read-Host { '5' }
+        $script:Hits = @((New-Machine 'a1' (Get-Date)), (New-Machine 'a2' (Get-Date)))
+        { Resolve-MdeMachine -Name 'a' } | Should -Throw "Invalid selection '5'."
+    }
+
+    It 'throws on a non-numeric pick' {
+        Mock Read-Host { 'first' }
+        $script:Hits = @((New-Machine 'a1' (Get-Date)), (New-Machine 'a2' (Get-Date)))
+        { Resolve-MdeMachine -Name 'a' } | Should -Throw "Invalid selection 'first'."
+    }
+
+    It 'throws instead of prompting under -Command' {
+        $script:NonInteractive = $true
+        Mock Read-Host { throw 'should not ask' }
+        $script:Hits = @((New-Machine 'a1' (Get-Date)), (New-Machine 'a2' (Get-Date)))
+        { Resolve-MdeMachine -Name 'a' } | Should -Throw '2 devices match*'
+    }
+
+    It 'fetches by id directly' {
+        Mock Invoke-MdeApi -ParameterFilter { $Path -eq 'api/machines/abc' } { New-Machine 'byid' (Get-Date) }
+        (Resolve-MdeMachine -Id 'abc').computerDnsName | Should -Be 'byid'
+    }
+}
+
+Describe 'Get-StoreCertificate' {
+    It 'names the stores it searched when the thumbprint is not found' {
+        { Get-StoreCertificate -Thumbprint ('00 ' * 20) } |
+            Should -Throw 'Certificate 0000000000000000000000000000000000000000 not found in CurrentUser\My or LocalMachine\My.'
+    }
 }
 
 Describe 'Request-Token (device code)' {

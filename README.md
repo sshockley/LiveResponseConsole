@@ -167,8 +167,9 @@ Expect roughly 10 to 40 seconds per command, unlike the sub-second response of t
 
 ## Development
 
-Unit tests (Pester 5) cover the parsing and sanitizing helpers, plus API retry handling
-and console verb dispatch with the network mocked. CI runs
+Unit tests (Pester 5) cover the parsing and sanitizing helpers, the transcript hash chain,
+API retries, token renewal, device resolution, verb dispatch and result downloads, with
+the network mocked. CI runs
 PSScriptAnalyzer (failing on Warning or Error) and the tests on Windows and Ubuntu.
 
 ```powershell
