@@ -520,8 +520,9 @@ function Receive-LiveResponseResult {
         $stem = '{0}_{1}_{2}' -f $script:Machine.computerDnsName, $ActionId.Substring(0, 8), $Index
         if ($isGzip) {
             $orig = Get-GzipOriginalName -Bytes $bytes
-            # FNAME is endpoint-supplied. Strip anything that is not a plain filename char.
-            if ($orig) { $orig = [regex]::Replace($orig, '[\x00-\x1f<>:"/\\|?*]', '_') }
+            # FNAME is endpoint-supplied. Strip anything that is not a plain filename char,
+            # including C1 controls: the ISO-8859-1 decode can yield 0x9B (8-bit CSI).
+            if ($orig) { $orig = [regex]::Replace($orig, '[\x00-\x1f\x7f-\x9f<>:"/\\|?*]', '_') }
             $leaf = if ($orig) { '{0}_{1}' -f $stem, $orig } else { $stem }
             $out = Join-Path $DownloadPath $leaf
             $in = [IO.File]::OpenRead($tmp)
