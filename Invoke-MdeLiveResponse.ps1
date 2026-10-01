@@ -1188,16 +1188,24 @@ Write-Transcript @{
     cloud = $Cloud; mode = $mode; tenantId = $TenantId; clientId = $ClientId; authMode = $script:AuthMode
 }
 
-if ($script:NonInteractive) {
-    $succeeded = Invoke-CommandBatch -Lines $Command
-    Write-Transcript @{ event = 'session_end'; succeeded = $succeeded }
+$succeeded = $false
+$completed = $false
+try {
+    if ($script:NonInteractive) {
+        $succeeded = Invoke-CommandBatch -Lines $Command
+    } else {
+        Start-Repl
+    }
+    $completed = $true
+} finally {
+    # Runs on Ctrl+C and unhandled errors too, so the transcript always has an end.
+    $end = @{ event = 'session_end'; completed = $completed }
+    if ($script:NonInteractive) { $end.succeeded = [bool]$succeeded }
+    Write-Transcript $end
+    # The chain cannot show lines cut off the end. Note this hash in the case file to cover that.
     Write-Status "Transcript hash: $script:TranscriptHash" 'Dim'
-    exit $(if ($succeeded) { 0 } else { 1 })
 }
 
-Start-Repl
-Write-Transcript @{ event = 'session_end' }
-# The chain cannot show lines cut off the end. Note this hash in the case file to cover that.
-Write-Status "Transcript hash: $script:TranscriptHash" 'Dim'
+if ($script:NonInteractive) { exit $(if ($succeeded) { 0 } else { 1 }) }
 
 #endregion
