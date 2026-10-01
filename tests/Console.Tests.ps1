@@ -16,7 +16,7 @@ BeforeAll {
     }
 
     foreach ($name in 'Split-CommandLine', 'Build-ChainedCommand', 'Get-GzipOriginalName', 'Remove-ControlCharacter',
-        'Copy-StreamBounded') {
+        'Copy-StreamBounded', 'Get-LineHash', 'Write-Transcript') {
         $fn = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -207,6 +207,48 @@ Describe 'Copy-StreamBounded' {
         $from = [IO.MemoryStream]::new([byte[]](1..10))
         $to = [IO.MemoryStream]::new()
         Copy-StreamBounded -From $from -To $to -Limit 9 | Should -BeFalse
+    }
+}
+
+Describe 'Transcript hash chain' {
+    BeforeAll {
+        $script:Verifier = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'Test-LRTranscript.ps1'
+    }
+
+    BeforeEach {
+        $script:LogFile = Join-Path $TestDrive "t-$([guid]::NewGuid()).jsonl"
+        $script:TranscriptHash = $null
+        Write-Transcript @{ event = 'session_start' }
+        Write-Transcript @{ event = 'submit'; commands = @('a') }
+        Write-Transcript @{ event = 'session_end' }
+    }
+
+    It 'links each line to the hash of the one before' {
+        $lines = @(Get-Content -LiteralPath $script:LogFile)
+        ($lines[0] | ConvertFrom-Json).prev | Should -BeNullOrEmpty
+        ($lines[1] | ConvertFrom-Json).prev | Should -Be (Get-LineHash $lines[0])
+        $script:TranscriptHash | Should -Be (Get-LineHash $lines[2])
+    }
+
+    It 'verifies an untouched transcript and reports the final hash' {
+        $r = & $script:Verifier -Path $script:LogFile
+        $r.Valid | Should -BeTrue
+        $r.FinalHash | Should -Be $script:TranscriptHash
+    }
+
+    It 'reports the line after an edited one' {
+        $lines = @(Get-Content -LiteralPath $script:LogFile)
+        $lines[1] = $lines[1].Replace('"a"', '"b"')
+        Set-Content -LiteralPath $script:LogFile -Value $lines
+        $r = & $script:Verifier -Path $script:LogFile
+        $r.Valid | Should -BeFalse
+        $r.BrokenAtLine | Should -Be 3
+    }
+
+    It 'reports a removed line' {
+        $lines = @(Get-Content -LiteralPath $script:LogFile)
+        Set-Content -LiteralPath $script:LogFile -Value $lines[0], $lines[2]
+        (& $script:Verifier -Path $script:LogFile).BrokenAtLine | Should -Be 2
     }
 }
 

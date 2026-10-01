@@ -116,11 +116,21 @@ function Write-Status {
     Write-Host $Message -ForegroundColor $color
 }
 
+function Get-LineHash {
+    param([string]$Line)
+    [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Line))).ToLower()
+}
+
 function Write-Transcript {
+    <# Appends one JSON line. Each line carries 'prev', the SHA-256 of the line before it,
+       so editing or removing a line breaks the chain (see Test-LRTranscript.ps1). #>
     param([hashtable]$Entry)
     if (-not $script:LogFile) { return }
     $Entry['timestamp'] = (Get-Date).ToUniversalTime().ToString('o')
-    ($Entry | ConvertTo-Json -Depth 6 -Compress) | Add-Content -LiteralPath $script:LogFile
+    $Entry['prev'] = $script:TranscriptHash
+    $line = $Entry | ConvertTo-Json -Depth 6 -Compress
+    Add-Content -LiteralPath $script:LogFile -Value $line
+    $script:TranscriptHash = Get-LineHash $line
 }
 
 function ConvertTo-Base64Url {
@@ -1155,6 +1165,12 @@ $script:FailedActions = 0
 $script:LogFile = if ($LogPath) { $LogPath } else {
     Join-Path (Get-Location) ('lr-session-{0}.jsonl' -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
 }
+# Appending to an existing -LogPath continues its chain rather than starting a new one.
+$script:TranscriptHash = $null
+if (Test-Path -LiteralPath $script:LogFile) {
+    $lastLine = Get-Content -LiteralPath $script:LogFile -Tail 1
+    if ($lastLine) { $script:TranscriptHash = Get-LineHash $lastLine }
+}
 
 Write-Status "Authenticating to $($script:Cfg.Api) ($Cloud)..." 'Info'
 Request-Token
@@ -1175,10 +1191,13 @@ Write-Transcript @{
 if ($script:NonInteractive) {
     $succeeded = Invoke-CommandBatch -Lines $Command
     Write-Transcript @{ event = 'session_end'; succeeded = $succeeded }
+    Write-Status "Transcript hash: $script:TranscriptHash" 'Dim'
     exit $(if ($succeeded) { 0 } else { 1 })
 }
 
 Start-Repl
 Write-Transcript @{ event = 'session_end' }
+# The chain cannot show lines cut off the end. Note this hash in the case file to cover that.
+Write-Status "Transcript hash: $script:TranscriptHash" 'Dim'
 
 #endregion

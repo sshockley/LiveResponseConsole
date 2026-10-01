@@ -10,6 +10,7 @@ REPL-style client for Microsoft Defender for Endpoint Live Response
 |---|---|
 | `Invoke-MdeLiveResponse.ps1` | The client. Auth, device resolution, command loop, result retrieval. |
 | `Invoke-LRCommand.ps1` | Library wrapper that backs the `cmd` verb. Upload to the tenant library once. |
+| `Test-LRTranscript.ps1` | Checks a session transcript's hash chain. |
 
 ## Requirements
 
@@ -136,7 +137,10 @@ put winpmem.exe --run Dump-Memory.ps1 -full --get C:\Windows\Temp\mem.raw.gz
   records SHA-256 of both the saved file and the download as received
 - Session transcript: `./lr-session-<timestamp>.jsonl` (`-LogPath`). Useful as case evidence,
   since tenant-side you otherwise only have the Action center record. It records the tenant,
-  app ID and auth mode at session start, and each action's ID and comment when queued
+  app ID and auth mode at session start, and each action's ID and comment when queued.
+  Each line carries the SHA-256 of the line before it, so `./Test-LRTranscript.ps1 <file>`
+  finds any edited, inserted or removed line. Lines cut off the end can't be detected that
+  way, so note the `Transcript hash` printed at exit in your case notes
 
 ## Limits
 
