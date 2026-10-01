@@ -13,9 +13,16 @@
     "Live response unsigned script execution" to be enabled, unless you sign it.
 
     Runs are bounded by the platform's 10 minute RunScript timeout.
+
+    The client sends the command as -EncodedCommand <base64 of UTF-8 text>, so quoting
+    survives the trip. Plain arguments are still accepted and joined with spaces, but
+    quotes in them are lost to argument splitting on the endpoint.
 #>
-[CmdletBinding()]
+# PositionalBinding off, so a plain first argument is never taken as EncodedCommand.
+[CmdletBinding(PositionalBinding = $false)]
 param(
+    [string]$EncodedCommand,
+
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$CommandParts
 )
@@ -23,7 +30,11 @@ param(
 $ErrorActionPreference = 'Continue'
 $ProgressPreference    = 'SilentlyContinue'
 
-$command = ($CommandParts -join ' ').Trim()
+$command = if ($EncodedCommand) {
+    [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($EncodedCommand)).Trim()
+} else {
+    ($CommandParts -join ' ').Trim()
+}
 
 if (-not $command) {
     Write-Output 'No command supplied. Usage: Invoke-LRCommand.ps1 <powershell expression>'

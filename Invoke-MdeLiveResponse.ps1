@@ -889,11 +889,15 @@ function Invoke-ConsoleLine {
 
         'cmd' {
             if (-not $rawRest) { Write-Usage 'Usage: cmd <powershell expression>'; break }
+            # Base64 so quotes, $, ; and dash-prefixed tokens reach the wrapper intact
+            # instead of being re-split or bound as its own parameters on the endpoint.
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($rawRest))
+            Write-Transcript @{ event = 'cmd'; command = $rawRest }
             $commands = @(@{
                 type   = 'RunScript'
                 params = @(
                     @{ key = 'ScriptName'; value = $CommandWrapperScript },
-                    @{ key = 'Args'; value = $rawRest }
+                    @{ key = 'Args'; value = "-EncodedCommand $encoded" }
                 )
             })
             Show-ActionResult (Invoke-LiveResponseAction -Commands $commands -ActionComment $script:SessionComment)
