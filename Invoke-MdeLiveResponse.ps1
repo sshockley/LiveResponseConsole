@@ -692,7 +692,8 @@ function Receive-LiveResponseResult {
     # Remove terminal escape sequences before they reach the console, the 'last' cache, or the transcript.
     $text = Remove-ControlCharacter $text
 
-    $printed = $false
+    # Keep what was shown, not the raw JSON envelope, so 'last' reprints the same view.
+    $shown = [System.Collections.Generic.List[string]]::new()
     try {
         $json = $text | ConvertFrom-Json
         foreach ($field in 'script_output', 'output', 'script_errors', 'errors', 'exit_code') {
@@ -701,8 +702,14 @@ function Receive-LiveResponseResult {
                 $val = Remove-ControlCharacter "$($json.$field)"
                 if ($null -ne $val -and "$val".Trim()) {
                     $lvl = if ($field -match 'error') { 'Bad' } else { 'Dim' }
-                    if ($field -match 'output') { Write-Host $val } else { Write-Status ("  {0}: {1}" -f $field, $val) $lvl }
-                    $printed = $true
+                    if ($field -match 'output') {
+                        Write-Host $val
+                        $shown.Add($val)
+                    } else {
+                        $line = '  {0}: {1}' -f $field, $val
+                        Write-Status $line $lvl
+                        $shown.Add($line)
+                    }
                 }
             }
         }
@@ -710,8 +717,11 @@ function Receive-LiveResponseResult {
         Write-Verbose 'RunScript result is not JSON; printing raw text.'
     }
 
-    if (-not $printed) { Write-Host $text }
-    $script:LastResult = $text
+    if ($shown.Count -eq 0) {
+        Write-Host $text
+        $shown.Add($text)
+    }
+    $script:LastResult = $shown -join [Environment]::NewLine
     if ($entry.savedTo) { Write-Status "  saved -> $($entry.savedTo)" 'Dim' }
     Write-Transcript $entry
 }
