@@ -21,8 +21,11 @@ REPL-style client for Microsoft Defender for Endpoint Live Response
 
   | Permission | Needed for |
   |---|---|
-  | `Machine.LiveResponse` | everything |
-  | `Machine.ReadWrite.All` | resolving device names, `actions` |
+  | `Machine.LiveResponse` | submitting actions |
+  | `Machine.ReadWrite.All` | fetching results, resolving device names, `actions` |
+
+  Without `Machine.ReadWrite.All`, actions still run but every result download is refused,
+  so commands appear to produce no output.
   | `Library.Manage` | `library` verbs |
 
 ## Creating app registration
