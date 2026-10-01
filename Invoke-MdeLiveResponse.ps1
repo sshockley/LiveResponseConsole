@@ -73,6 +73,9 @@ param(
 
     # Cap on an ungzipped GetFile. Past this the gzip is kept as received instead.
     [ValidateRange(1, [int]::MaxValue)][int]$MaxExtractGB = 50,
+
+    # Also save each RunScript result, unsanitized, under -DownloadPath and hash it.
+    [switch]$SaveOutput,
     [string]$Comment = 'Live Response via Invoke-MdeLiveResponse.ps1',
     [string[]]$Command
 )
@@ -434,6 +437,7 @@ function Invoke-LiveResponseAction {
     }
 
     Write-Status "action $($action.id) queued" 'Dim'
+    Write-Transcript @{ event = 'queued'; machine = $script:Machine.id; actionId = $action.id; comment = $ActionComment }
     Wait-MdeMachineAction -ActionId $action.id
 }
 
@@ -605,6 +609,17 @@ function Receive-LiveResponseResult {
         Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
     }
 
+    $entry = @{ event = 'runscript_result'; actionId = $ActionId; index = $Index; bytes = $text.Length }
+    if ($SaveOutput) {
+        # Saved as received: the file is evidence, and nothing renders it to a terminal here.
+        if (-not (Test-Path $DownloadPath)) { New-Item -ItemType Directory -Path $DownloadPath -Force | Out-Null }
+        $out = Join-Path $DownloadPath ('{0}_{1}_{2}_output.txt' -f
+            $script:Machine.computerDnsName, $ActionId.Substring(0, 8), $Index)
+        [IO.File]::WriteAllText($out, $text)
+        $entry.savedTo = $out
+        $entry.sha256 = (Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToLower()
+    }
+
     # Remove terminal escape sequences before they reach the console, the 'last' cache, or the transcript.
     $text = Remove-ControlCharacter $text
 
@@ -628,7 +643,8 @@ function Receive-LiveResponseResult {
 
     if (-not $printed) { Write-Host $text }
     $script:LastResult = $text
-    Write-Transcript @{ event = 'runscript_result'; actionId = $ActionId; bytes = $text.Length }
+    if ($entry.savedTo) { Write-Status "  saved -> $($entry.savedTo)" 'Dim' }
+    Write-Transcript $entry
 }
 
 #endregion
@@ -1029,7 +1045,10 @@ if ($script:Machine.healthStatus -ne 'Active') {
 }
 
 $mode = if ($script:NonInteractive) { 'command' } else { 'interactive' }
-Write-Transcript @{ event = 'session_start'; machine = $script:Machine.computerDnsName; machineId = $script:Machine.id; cloud = $Cloud; mode = $mode }
+Write-Transcript @{
+    event = 'session_start'; machine = $script:Machine.computerDnsName; machineId = $script:Machine.id
+    cloud = $Cloud; mode = $mode; tenantId = $TenantId; clientId = $ClientId; authMode = $script:AuthMode
+}
 
 if ($script:NonInteractive) {
     $succeeded = Invoke-CommandBatch -Lines $Command
