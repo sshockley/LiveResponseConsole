@@ -255,17 +255,18 @@ function Request-Token {
         }
 
         default {
-            if (-not $ClientSecret) {
+            # Script scope, so a prompted secret survives to the next token refresh.
+            if (-not $script:ClientSecret) {
                 if ($env:MDE_CLIENT_SECRET) {
-                    $ClientSecret = ConvertTo-SecureString $env:MDE_CLIENT_SECRET -AsPlainText -Force
+                    $script:ClientSecret = ConvertTo-SecureString $env:MDE_CLIENT_SECRET -AsPlainText -Force
                 } else {
-                    $ClientSecret = Read-Host -Prompt 'Client secret' -AsSecureString
+                    $script:ClientSecret = Read-Host -Prompt 'Client secret' -AsSecureString
                 }
             }
             $resp = Invoke-RestMethod -Method Post -Uri $tokenEndpoint -Body @{
                 grant_type    = 'client_credentials'
                 client_id     = $ClientId
-                client_secret = Unprotect-SecureString $ClientSecret
+                client_secret = Unprotect-SecureString $script:ClientSecret
                 resource      = $script:Cfg.Resource
             }
         }
