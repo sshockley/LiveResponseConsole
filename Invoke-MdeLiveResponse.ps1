@@ -1071,6 +1071,11 @@ function Invoke-CommandBatch {
 
 $script:NonInteractive = $Command.Count -gt 0
 
+# Resolve against the PowerShell location now. [IO.File] calls resolve relative paths
+# against the process working directory, which Set-Location does not change.
+$DownloadPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($DownloadPath)
+if ($LogPath) { $LogPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($LogPath) }
+
 if (-not $DeviceName -and -not $MachineId) {
     if ($script:NonInteractive) { throw '-Command requires -DeviceName or -MachineId.' }
     $DeviceName = Read-Host 'Device name (or machine id)'
