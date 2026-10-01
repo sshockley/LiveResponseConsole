@@ -544,18 +544,30 @@ function Wait-MdeMachineAction {
     $n = 0
     $last = ''
 
+    # In a log file (CI, scheduled task) the \r redraws pile up into one huge line, so the
+    # spinner only runs on a real console. $drawn tracks a spinner line that needs ending.
+    $spinner = -not [Console]::IsOutputRedirected
+    $drawn = $false
+    $notedInvisible = $false
+
     while ((Get-Date) -lt $deadline) {
         try {
             $action = Invoke-MdeApi -Path "api/machineactions/$ActionId"
         } catch {
             if ($_.Exception.Message -match 'HTTP 404' -and (Get-Date) -lt $notFoundUntil) {
-                Write-Host ("`r  {0} action not yet visible, retrying..." -f $spin[$n++ % 4]) `
-                    -NoNewline -ForegroundColor DarkGray
+                if ($spinner) {
+                    Write-Host ("`r  {0} action not yet visible, retrying..." -f $spin[$n++ % 4]) `
+                        -NoNewline -ForegroundColor DarkGray
+                    $drawn = $true
+                } elseif (-not $notedInvisible) {
+                    Write-Status '  action not yet visible, retrying...' 'Dim'
+                    $notedInvisible = $true
+                }
                 Start-Sleep -Seconds $PollIntervalSeconds
                 continue
             }
             if ($_.Exception.Message -match 'HTTP 404') {
-                Write-Host ''
+                if ($drawn) { Write-Host '' }
                 Write-Status "Action $ActionId still not visible after 2 min. Check the Action center, or 'actions'." 'Bad'
                 return $null
             }
@@ -563,22 +575,23 @@ function Wait-MdeMachineAction {
         }
 
         if ($action.status -ne $last) {
-            Write-Host ''
+            if ($drawn) { Write-Host ''; $drawn = $false }
             Write-Status "  status: $($action.status)" 'Dim'
             $last = $action.status
-        } else {
+        } elseif ($spinner) {
             Write-Host ("`r  {0} waiting..." -f $spin[$n++ % 4]) -NoNewline -ForegroundColor DarkGray
+            $drawn = $true
         }
 
         if ($action.status -in @('Succeeded', 'Failed', 'TimeOut', 'Cancelled')) {
-            Write-Host ''
+            if ($drawn) { Write-Host '' }
             Write-Transcript @{ event = 'complete'; actionId = $ActionId; status = $action.status }
             return $action
         }
         Start-Sleep -Seconds $PollIntervalSeconds
     }
 
-    Write-Host ''
+    if ($drawn) { Write-Host '' }
     Write-Status "Timed out locally after $ActionTimeoutMinutes min. The action may still complete server-side: 'actions' to check." 'Warn'
     $null
 }
