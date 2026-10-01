@@ -511,53 +511,67 @@ function Show-ActionResult {
 function Receive-LiveResponseResult {
     param([string]$Url, [string]$CommandType, [string]$ActionId, [int]$Index)
 
-    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("lr_{0}_{1}.bin" -f $ActionId, $Index)
-    Invoke-WebRequest -Uri $Url -OutFile $tmp -MaximumRedirection 5 | Out-Null
+    # The payload is endpoint-supplied and may be malware. Use an unguessable name in the
+    # shared temp dir, and remove it even when a step below fails.
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('lr_{0}.bin' -f [guid]::NewGuid().ToString('N'))
+    try {
+        Invoke-WebRequest -Uri $Url -OutFile $tmp -MaximumRedirection 5 | Out-Null
 
-    $bytes = [IO.File]::ReadAllBytes($tmp)
-    $isGzip = $bytes.Length -gt 2 -and $bytes[0] -eq 0x1f -and $bytes[1] -eq 0x8b
+        $bytes = [IO.File]::ReadAllBytes($tmp)
+        $isGzip = $bytes.Length -gt 2 -and $bytes[0] -eq 0x1f -and $bytes[1] -eq 0x8b
 
-    if ($CommandType -eq 'GetFile') {
-        if (-not (Test-Path $DownloadPath)) { New-Item -ItemType Directory -Path $DownloadPath -Force | Out-Null }
-        $stem = '{0}_{1}_{2}' -f $script:Machine.computerDnsName, $ActionId.Substring(0, 8), $Index
-        if ($isGzip) {
-            $orig = Get-GzipOriginalName -Bytes $bytes
-            # FNAME is endpoint-supplied. Strip anything that is not a plain filename char,
-            # including C1 controls: the ISO-8859-1 decode can yield 0x9B (8-bit CSI).
-            if ($orig) { $orig = [regex]::Replace($orig, '[\x00-\x1f\x7f-\x9f<>:"/\\|?*]', '_') }
-            $leaf = if ($orig) { '{0}_{1}' -f $stem, $orig } else { $stem }
-            $out = Join-Path $DownloadPath $leaf
-            $in = [IO.File]::OpenRead($tmp)
-            $gz = [IO.Compression.GZipStream]::new($in, [IO.Compression.CompressionMode]::Decompress)
-            $fs = [IO.File]::Create($out)
-            $gz.CopyTo($fs); $fs.Dispose(); $gz.Dispose(); $in.Dispose()
-            Write-Status "  collected -> $out ($([math]::Round((Get-Item $out).Length/1KB,1)) KB, ungzipped)" 'Good'
-        } else {
-            $out = Join-Path $DownloadPath "$stem.bin"
-            Copy-Item $tmp $out -Force
-            Write-Status "  collected -> $out" 'Good'
+        if ($CommandType -eq 'GetFile') {
+            if (-not (Test-Path $DownloadPath)) { New-Item -ItemType Directory -Path $DownloadPath -Force | Out-Null }
+            $stem = '{0}_{1}_{2}' -f $script:Machine.computerDnsName, $ActionId.Substring(0, 8), $Index
+            if ($isGzip) {
+                $orig = Get-GzipOriginalName -Bytes $bytes
+                # FNAME is endpoint-supplied. Strip anything that is not a plain filename char,
+                # including C1 controls: the ISO-8859-1 decode can yield 0x9B (8-bit CSI).
+                if ($orig) { $orig = [regex]::Replace($orig, '[\x00-\x1f\x7f-\x9f<>:"/\\|?*]', '_') }
+                $leaf = if ($orig) { '{0}_{1}' -f $stem, $orig } else { $stem }
+                $out = Join-Path $DownloadPath $leaf
+                $in = $gz = $fs = $null
+                try {
+                    $in = [IO.File]::OpenRead($tmp)
+                    $gz = [IO.Compression.GZipStream]::new($in, [IO.Compression.CompressionMode]::Decompress)
+                    $fs = [IO.File]::Create($out)
+                    $gz.CopyTo($fs)
+                } finally {
+                    foreach ($s in $fs, $gz, $in) { if ($s) { $s.Dispose() } }
+                }
+                Write-Status "  collected -> $out ($([math]::Round((Get-Item -LiteralPath $out).Length/1KB,1)) KB, ungzipped)" 'Good'
+            } else {
+                $out = Join-Path $DownloadPath "$stem.bin"
+                Copy-Item -LiteralPath $tmp $out -Force
+                Write-Status "  collected -> $out" 'Good'
+            }
+
+            # Hash what was written to disk so the transcript can stand as evidence that the
+            # file examined later is the file that was collected.
+            $sha256 = (Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToLower()
+            $length = (Get-Item -LiteralPath $out).Length
+            Write-Status "  sha256 $sha256" 'Dim'
+            Write-Transcript @{ event = 'getfile'; actionId = $ActionId; index = $Index; savedTo = $out; sha256 = $sha256; bytes = $length }
+            return
         }
-        Remove-Item $tmp -Force
 
-        # Hash what was written to disk so the transcript can stand as evidence that the
-        # file examined later is the file that was collected.
-        $sha256 = (Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToLower()
-        $length = (Get-Item -LiteralPath $out).Length
-        Write-Status "  sha256 $sha256" 'Dim'
-        Write-Transcript @{ event = 'getfile'; actionId = $ActionId; index = $Index; savedTo = $out; sha256 = $sha256; bytes = $length }
-        return
+        # RunScript: result is text (usually JSON with script_output / script_errors)
+        $text = if ($isGzip) {
+            $in = $gz = $sr = $null
+            try {
+                $in = [IO.File]::OpenRead($tmp)
+                $gz = [IO.Compression.GZipStream]::new($in, [IO.Compression.CompressionMode]::Decompress)
+                $sr = [IO.StreamReader]::new($gz)
+                $sr.ReadToEnd()
+            } finally {
+                foreach ($s in $sr, $gz, $in) { if ($s) { $s.Dispose() } }
+            }
+        } else {
+            [IO.File]::ReadAllText($tmp)
+        }
+    } finally {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
     }
-
-    # RunScript: result is text (usually JSON with script_output / script_errors)
-    $text = if ($isGzip) {
-        $in = [IO.File]::OpenRead($tmp)
-        $gz = [IO.Compression.GZipStream]::new($in, [IO.Compression.CompressionMode]::Decompress)
-        $sr = [IO.StreamReader]::new($gz)
-        $t = $sr.ReadToEnd(); $sr.Dispose(); $gz.Dispose(); $in.Dispose(); $t
-    } else {
-        [IO.File]::ReadAllText($tmp)
-    }
-    Remove-Item $tmp -Force
 
     # Remove terminal escape sequences before they reach the console, the 'last' cache, or the transcript.
     $text = Remove-ControlCharacter $text
