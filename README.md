@@ -60,7 +60,7 @@ $env:MDE_CLIENT_SECRET = '...'   # or omit and be prompted
 
 Clouds: `-Cloud Commercial|UsGovGcc|UsGovGccHigh|UsGovDoD`. Override the host with `-ApiBaseUri https://eu.api.security.microsoft.com` for lower latency. Verify gov host names against current docs as they can change.
 
-Other parameters: `-MachineId`, `-DownloadPath`, `-LogPath`, `-PollIntervalSeconds`, `-ActionTimeoutMinutes`, `-Comment`, `-CommandWrapperScript`, `-Command`.
+Other parameters: `-MachineId`, `-DownloadPath`, `-LogPath`, `-PollIntervalSeconds`, `-ActionTimeoutMinutes`, `-MaxExtractGB`, `-Comment`, `-CommandWrapperScript`, `-Command`.
 
 ## Non-interactive mode
 
@@ -119,7 +119,9 @@ put winpmem.exe --run Dump-Memory.ps1 -full --get C:\Windows\Temp\mem.raw.gz
 ## Output
 
 - `RunScript` results print to console; raw text cached for `last`
-- `GetFile` results ungzip into `./lr-downloads` (`-DownloadPath`)
+- `GetFile` results ungzip into `./lr-downloads` (`-DownloadPath`). Anything that would
+  ungzip past `-MaxExtractGB` (default 50) is kept as the received `.gz`. The transcript
+  records SHA-256 of both the saved file and the download as received
 - Session transcript: `./lr-session-<timestamp>.jsonl` (`-LogPath`). Useful as case evidence,
   since tenant-side you otherwise only have the Action center record
 

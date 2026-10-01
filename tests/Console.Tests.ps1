@@ -15,7 +15,8 @@ BeforeAll {
         throw "Parse errors in ${scriptPath}: $($parseErrors | ForEach-Object { $_.Message } | Out-String)"
     }
 
-    foreach ($name in 'Split-CommandLine', 'Build-ChainedCommand', 'Get-GzipOriginalName', 'Remove-ControlCharacter') {
+    foreach ($name in 'Split-CommandLine', 'Build-ChainedCommand', 'Get-GzipOriginalName', 'Remove-ControlCharacter',
+        'Copy-StreamBounded') {
         $fn = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -191,6 +192,21 @@ Describe 'Get-GzipOriginalName' {
 
     It 'returns null for input too short to hold a header' {
         Get-GzipOriginalName -Bytes ([byte[]](0x1f, 0x8b, 0x08, 0x08)) | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Copy-StreamBounded' {
+    It 'copies everything and returns true within the limit' {
+        $from = [IO.MemoryStream]::new([byte[]](1..10))
+        $to = [IO.MemoryStream]::new()
+        Copy-StreamBounded -From $from -To $to -Limit 10 | Should -BeTrue
+        $to.ToArray() | Should -Be ([byte[]](1..10))
+    }
+
+    It 'returns false once the limit is exceeded' {
+        $from = [IO.MemoryStream]::new([byte[]](1..10))
+        $to = [IO.MemoryStream]::new()
+        Copy-StreamBounded -From $from -To $to -Limit 9 | Should -BeFalse
     }
 }
 

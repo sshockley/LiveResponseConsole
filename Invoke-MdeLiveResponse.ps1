@@ -70,6 +70,9 @@ param(
     [string]$LogPath,
     [int]$PollIntervalSeconds = 5,
     [int]$ActionTimeoutMinutes = 15,
+
+    # Cap on an ungzipped GetFile. Past this the gzip is kept as received instead.
+    [ValidateRange(1, [int]::MaxValue)][int]$MaxExtractGB = 50,
     [string]$Comment = 'Live Response via Invoke-MdeLiveResponse.ps1',
     [string[]]$Command
 )
@@ -149,6 +152,20 @@ function Remove-ControlCharacter {
     if ([string]::IsNullOrEmpty($Text)) { return $Text }
     [regex]::Replace($Text, '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\x80-\x9F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]',
         [string][char]0xFFFD)
+}
+
+function Copy-StreamBounded {
+    <# Copies From to To, stopping once more than Limit bytes have been read. Returns
+       $true if the whole stream fit. Guards against gzip bombs from the endpoint. #>
+    param([IO.Stream]$From, [IO.Stream]$To, [long]$Limit)
+    $buf = [byte[]]::new(1MB)
+    $total = 0L
+    while (($n = $From.Read($buf, 0, $buf.Length)) -gt 0) {
+        $total += $n
+        if ($total -gt $Limit) { return $false }
+        $To.Write($buf, 0, $n)
+    }
+    $true
 }
 
 function Unprotect-SecureString {
@@ -523,6 +540,10 @@ function Receive-LiveResponseResult {
         if ($CommandType -eq 'GetFile') {
             if (-not (Test-Path $DownloadPath)) { New-Item -ItemType Directory -Path $DownloadPath -Force | Out-Null }
             $stem = '{0}_{1}_{2}' -f $script:Machine.computerDnsName, $ActionId.Substring(0, 8), $Index
+            # Hash the download as received too, since the saved file is usually ungzipped.
+            $rawSha256 = (Get-FileHash -LiteralPath $tmp -Algorithm SHA256).Hash.ToLower()
+            $rawLength = (Get-Item -LiteralPath $tmp).Length
+            $extracted = $false
             if ($isGzip) {
                 $orig = Get-GzipOriginalName -Bytes $bytes
                 # FNAME is endpoint-supplied. Strip anything that is not a plain filename char,
@@ -535,11 +556,18 @@ function Receive-LiveResponseResult {
                     $in = [IO.File]::OpenRead($tmp)
                     $gz = [IO.Compression.GZipStream]::new($in, [IO.Compression.CompressionMode]::Decompress)
                     $fs = [IO.File]::Create($out)
-                    $gz.CopyTo($fs)
+                    $extracted = Copy-StreamBounded -From $gz -To $fs -Limit ([long]$MaxExtractGB * 1GB)
                 } finally {
                     foreach ($s in $fs, $gz, $in) { if ($s) { $s.Dispose() } }
                 }
-                Write-Status "  collected -> $out ($([math]::Round((Get-Item -LiteralPath $out).Length/1KB,1)) KB, ungzipped)" 'Good'
+                if ($extracted) {
+                    Write-Status "  collected -> $out ($([math]::Round((Get-Item -LiteralPath $out).Length/1KB,1)) KB, ungzipped)" 'Good'
+                } else {
+                    Remove-Item -LiteralPath $out -Force
+                    $out = "$out.gz"
+                    Copy-Item -LiteralPath $tmp $out -Force
+                    Write-Status "  ungzipped size exceeds -MaxExtractGB $MaxExtractGB; kept as received -> $out" 'Warn'
+                }
             } else {
                 $out = Join-Path $DownloadPath "$stem.bin"
                 Copy-Item -LiteralPath $tmp $out -Force
@@ -551,7 +579,11 @@ function Receive-LiveResponseResult {
             $sha256 = (Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToLower()
             $length = (Get-Item -LiteralPath $out).Length
             Write-Status "  sha256 $sha256" 'Dim'
-            Write-Transcript @{ event = 'getfile'; actionId = $ActionId; index = $Index; savedTo = $out; sha256 = $sha256; bytes = $length }
+            if ($extracted) { Write-Status "  sha256 $rawSha256 (as received)" 'Dim' }
+            Write-Transcript @{
+                event = 'getfile'; actionId = $ActionId; index = $Index; savedTo = $out; sha256 = $sha256; bytes = $length
+                rawSha256 = $rawSha256; rawBytes = $rawLength; ungzipped = $extracted
+            }
             return
         }
 
