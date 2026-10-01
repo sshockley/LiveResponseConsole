@@ -137,6 +137,13 @@ Describe 'Invoke-MdeApi' {
         Should -Invoke Start-Sleep -Times 1 -ParameterFilter { $Seconds -ge 25 -and $Seconds -le 31 }
     }
 
+    It 'caps a very long Retry-After' {
+        $script:Responses.Enqueue((New-Response 429 '' @{ 'Retry-After' = @('86400') }))
+        $script:Responses.Enqueue((New-Response 200 '{}'))
+        Invoke-MdeApi -Path 'api/x' | Out-Null
+        Should -Invoke Start-Sleep -Times 1 -ParameterFilter { $Seconds -eq 300 }
+    }
+
     It 'retries a GET on 503' {
         $script:Responses.Enqueue((New-Response 503))
         $script:Responses.Enqueue((New-Response 200 '{"ok":true}'))

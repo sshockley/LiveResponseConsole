@@ -432,7 +432,15 @@ function Invoke-MdeApi {
             }
             if ($wait -le 0) { $wait = [Math]::Min(60, [Math]::Pow(2, $attempt + 2)) }
             $why = if ($code -eq 429) { 'Throttled (429)' } else { "HTTP $code" }
-            Write-Status "$why. Waiting ${wait}s..." 'Warn'
+            # Cap the wait so a huge Retry-After cannot stall the session with no way out
+            # but Ctrl+C. Retrying early just earns another 429.
+            $maxWait = 300
+            if ($wait -gt $maxWait) {
+                Write-Status "$why. Server asked for ${wait}s; waiting ${maxWait}s instead..." 'Warn'
+                $wait = $maxWait
+            } else {
+                Write-Status "$why. Waiting ${wait}s..." 'Warn'
+            }
             Start-Sleep -Seconds $wait
             continue
         }
