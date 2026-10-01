@@ -275,33 +275,55 @@ function Request-Token {
         }
 
         'DeviceCode' {
-            $dcEndpoint = '{0}/{1}/oauth2/devicecode' -f $script:Cfg.Authority, $TenantId
-            $dc = Invoke-RestMethod -Method Post -Uri $dcEndpoint -Body @{
-                client_id = $ClientId
-                resource  = $script:Cfg.Resource
-            }
-            Write-Status $dc.message 'Warn'
-            $dcInterval = if ($dc.PSObject.Properties.Name -contains 'interval' -and [int]$dc.interval -gt 0) {
-                [int]$dc.interval } else { 5 }
-            $deadline = (Get-Date).AddSeconds([int]$dc.expires_in)
             $resp = $null
-            while (-not $resp -and (Get-Date) -lt $deadline) {
-                Start-Sleep -Seconds $dcInterval
+            # Renew silently when possible, so the analyst is not sent back to the browser
+            # every time the access token expires.
+            if ($script:RefreshToken) {
                 try {
                     $resp = Invoke-RestMethod -Method Post -Uri $tokenEndpoint -Body @{
-                        grant_type  = 'urn:ietf:params:oauth:grant-type:device_code'
-                        client_id   = $ClientId
-                        resource    = $script:Cfg.Resource
-                        device_code = $dc.device_code
+                        grant_type    = 'refresh_token'
+                        client_id     = $ClientId
+                        resource      = $script:Cfg.Resource
+                        refresh_token = $script:RefreshToken
                     }
                 } catch {
-                    $detail = $_.ErrorDetails.Message
-                    if ($detail -notmatch 'authorization_pending|slow_down') { throw }
-                    # RFC 8628 3.5: back off by 5 seconds on every slow_down.
-                    if ($detail -match 'slow_down') { $dcInterval += 5 }
+                    Write-Status "Token refresh failed ($($_.Exception.Message)); signing in again." 'Warn'
                 }
             }
-            if (-not $resp) { throw 'Device code flow timed out.' }
+
+            if (-not $resp) {
+                $dcEndpoint = '{0}/{1}/oauth2/devicecode' -f $script:Cfg.Authority, $TenantId
+                $dc = Invoke-RestMethod -Method Post -Uri $dcEndpoint -Body @{
+                    client_id = $ClientId
+                    resource  = $script:Cfg.Resource
+                }
+                Write-Status $dc.message 'Warn'
+                $dcInterval = if ($dc.PSObject.Properties.Name -contains 'interval' -and [int]$dc.interval -gt 0) {
+                    [int]$dc.interval } else { 5 }
+                $deadline = (Get-Date).AddSeconds([int]$dc.expires_in)
+                while (-not $resp -and (Get-Date) -lt $deadline) {
+                    Start-Sleep -Seconds $dcInterval
+                    try {
+                        $resp = Invoke-RestMethod -Method Post -Uri $tokenEndpoint -Body @{
+                            grant_type  = 'urn:ietf:params:oauth:grant-type:device_code'
+                            client_id   = $ClientId
+                            resource    = $script:Cfg.Resource
+                            device_code = $dc.device_code
+                        }
+                    } catch {
+                        $detail = $_.ErrorDetails.Message
+                        if ($detail -notmatch 'authorization_pending|slow_down') { throw }
+                        # RFC 8628 3.5: back off by 5 seconds on every slow_down.
+                        if ($detail -match 'slow_down') { $dcInterval += 5 }
+                    }
+                }
+                if (-not $resp) { throw 'Device code flow timed out.' }
+            }
+
+            # Entra may rotate the refresh token, so always keep the newest one.
+            if ($resp.PSObject.Properties.Name -contains 'refresh_token' -and $resp.refresh_token) {
+                $script:RefreshToken = $resp.refresh_token
+            }
         }
 
         default {
@@ -1085,6 +1107,7 @@ if (-not $DeviceName -and -not $MachineId) {
 $script:AuthMode = $PSCmdlet.ParameterSetName
 $script:SessionComment = $Comment
 $script:LastResult = $null
+$script:RefreshToken = $null
 $script:FailedActions = 0
 $script:LogFile = if ($LogPath) { $LogPath } else {
     Join-Path (Get-Location) ('lr-session-{0}.jsonl' -f (Get-Date -Format 'yyyyMMdd-HHmmss'))

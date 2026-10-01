@@ -23,7 +23,8 @@ BeforeAll {
         throw "Parse errors in ${scriptPath}: $($parseErrors | ForEach-Object { $_.Message } | Out-String)"
     }
 
-    foreach ($name in 'Invoke-MdeApi', 'Invoke-ConsoleLine', 'Split-CommandLine', 'Build-ChainedCommand', 'Write-Usage') {
+    foreach ($name in 'Invoke-MdeApi', 'Invoke-ConsoleLine', 'Split-CommandLine', 'Build-ChainedCommand', 'Write-Usage',
+        'Request-Token') {
         $fn = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -46,8 +47,60 @@ BeforeAll {
         [pscustomobject]@{ StatusCode = $Code; Content = $Content; Headers = $Headers }
     }
 
-    $script:Cfg = @{ Api = 'https://api.test' }
+    $script:Cfg = @{ Api = 'https://api.test'; Authority = 'https://login.test'; Resource = 'https://api.test' }
     $CommandWrapperScript = 'Invoke-LRCommand.ps1'
+    $TenantId = 'tenant'
+    $ClientId = 'client'
+}
+
+Describe 'Request-Token (device code)' {
+    BeforeEach {
+        Mock Start-Sleep {}
+        Mock Write-Status {}
+        $script:AuthMode = 'DeviceCode'
+        $script:RefreshToken = $null
+        $script:AccessToken = $null
+    }
+
+    It 'keeps the refresh token from a device code sign-in' {
+        Mock Invoke-RestMethod -ParameterFilter { $Uri -like '*/devicecode' } {
+            [pscustomobject]@{ message = 'go'; device_code = 'dc'; expires_in = 900; interval = 1 }
+        }
+        Mock Invoke-RestMethod -ParameterFilter { $Uri -like '*/token' } {
+            [pscustomobject]@{ access_token = 'at1'; refresh_token = 'rt1'; expires_in = 3600 }
+        }
+        Request-Token
+        $script:AccessToken | Should -Be 'at1'
+        $script:RefreshToken | Should -Be 'rt1'
+    }
+
+    It 'renews with the refresh token instead of a new device code' {
+        $script:RefreshToken = 'rt1'
+        Mock Invoke-RestMethod -ParameterFilter { $Uri -like '*/devicecode' } { throw 'should not prompt' }
+        Mock Invoke-RestMethod -ParameterFilter { $Uri -like '*/token' -and $Body.grant_type -eq 'refresh_token' } {
+            [pscustomobject]@{ access_token = 'at2'; refresh_token = 'rt2'; expires_in = 3600 }
+        }
+        Request-Token
+        $script:AccessToken | Should -Be 'at2'
+        $script:RefreshToken | Should -Be 'rt2'
+        Should -Invoke Invoke-RestMethod -Times 0 -ParameterFilter { $Uri -like '*/devicecode' }
+    }
+
+    It 'falls back to a new device code when the refresh token is rejected' {
+        $script:RefreshToken = 'expired'
+        Mock Invoke-RestMethod -ParameterFilter { $Uri -like '*/token' -and $Body.grant_type -eq 'refresh_token' } {
+            throw 'invalid_grant'
+        }
+        Mock Invoke-RestMethod -ParameterFilter { $Uri -like '*/devicecode' } {
+            [pscustomobject]@{ message = 'go'; device_code = 'dc'; expires_in = 900; interval = 1 }
+        }
+        Mock Invoke-RestMethod -ParameterFilter { $Uri -like '*/token' -and $Body.grant_type -like '*device_code' } {
+            [pscustomobject]@{ access_token = 'at3'; refresh_token = 'rt3'; expires_in = 3600 }
+        }
+        Request-Token
+        $script:AccessToken | Should -Be 'at3'
+        $script:RefreshToken | Should -Be 'rt3'
+    }
 }
 
 Describe 'Invoke-MdeApi' {
