@@ -202,6 +202,12 @@ Describe 'Remove-ControlCharacter' {
         $out | Should -Be "a${r}[31mb${r}c${r}d${r}${r}e"
     }
 
+    It 'replaces bidi embedding, override and isolate controls' {
+        $in = 'a' + [char]0x202E + 'b' + [char]0x2066 + 'c' + [char]0x200F + 'd' + [char]0x061C + 'e'
+        $r = [string][char]0xFFFD
+        Remove-ControlCharacter $in | Should -Be "a${r}b${r}c${r}d${r}e"
+    }
+
     It 'keeps tab, carriage return and line feed' {
         $in = "col1`tcol2`r`nrow2"
         Remove-ControlCharacter $in | Should -Be $in

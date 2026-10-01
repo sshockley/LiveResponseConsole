@@ -138,15 +138,17 @@ function Get-GzipOriginalName {
 }
 
 function Remove-ControlCharacter {
-    <# Replaces C0/C1 control characters (except TAB, CR, LF) with U+FFFD. RunScript
-       output and gzip FNAME fields come from the endpoint, which on a compromised host is
-       attacker-controlled; raw escape sequences could otherwise rewrite the analyst's
-       terminal or forge lines in the transcript. #>
+    <# Replaces C0/C1 control characters (except TAB, CR, LF) and Unicode bidi controls
+       with U+FFFD. RunScript output and gzip FNAME fields come from the endpoint, which on
+       a compromised host is attacker-controlled; raw escape sequences could otherwise
+       rewrite the analyst's terminal or forge lines in the transcript, and bidi overrides
+       can make text display in a different order than it actually reads. #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
         Justification = 'Pure function: returns a sanitized copy of the input string.')]
     param([AllowNull()][AllowEmptyString()][string]$Text)
     if ([string]::IsNullOrEmpty($Text)) { return $Text }
-    [regex]::Replace($Text, '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\x80-\x9F]', [string][char]0xFFFD)
+    [regex]::Replace($Text, '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\x80-\x9F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]',
+        [string][char]0xFFFD)
 }
 
 function Unprotect-SecureString {
