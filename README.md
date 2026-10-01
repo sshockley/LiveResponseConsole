@@ -35,8 +35,9 @@ See [AppRegistration.md](AppRegistration.md)
 See [CertificateSetup.md](CertificateSetup.md)
 
 ## First run
-Add the command script to the library
-```powershell
+Start a session (see [Authentication](#authentication)), then add the command script to
+the library from the console prompt. This needs `Library.Manage`.
+```
 library upload ./Invoke-LRCommand.ps1 "Analyst command channel"
 ```
 `cmd` sends its text base64-encoded (`-EncodedCommand`), so re-upload the wrapper whenever
