@@ -23,7 +23,7 @@ BeforeAll {
         throw "Parse errors in ${scriptPath}: $($parseErrors | ForEach-Object { $_.Message } | Out-String)"
     }
 
-    foreach ($name in 'Invoke-MdeApi', 'Invoke-ConsoleLine', 'Split-CommandLine', 'Build-ChainedCommand', 'Write-Usage',
+    foreach ($name in 'Invoke-MdeApi', 'Get-RetryAfterSecond', 'Invoke-ConsoleLine', 'Split-CommandLine', 'Build-ChainedCommand', 'Write-Usage',
         'Request-Token', 'Confirm-Action', 'Resolve-MdeMachine', 'Get-StoreCertificate', 'Get-FileSha256') {
         $fn = $ast.Find({
             param($node)

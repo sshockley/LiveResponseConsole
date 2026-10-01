@@ -388,6 +388,25 @@ function Get-AccessToken {
 
 #region API plumbing ----------------------------------------------------------
 
+function Get-RetryAfterSecond {
+    <# Returns the wait the response's Retry-After header asks for, or 0 if it has none.
+       Retry-After is either delta-seconds or an HTTP-date. #>
+    param($Response)
+    $ra = $Response.Headers.GetEnumerator() | Where-Object { $_.Key -ieq 'Retry-After' } |
+          Select-Object -First 1
+    if (-not $ra) { return 0 }
+
+    $raw = [string]($ra.Value | Select-Object -First 1)
+    $secs = 0
+    $when = [DateTimeOffset]::MinValue
+    if ([int]::TryParse($raw, [ref]$secs)) { return $secs }
+    if ([DateTimeOffset]::TryParse($raw, [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$when)) {
+        return [int][Math]::Ceiling(($when - [DateTimeOffset]::UtcNow).TotalSeconds)
+    }
+    0
+}
+
 function Invoke-MdeApi {
     param(
         [ValidateSet('GET', 'POST', 'DELETE')][string]$Method = 'GET',
@@ -426,21 +445,7 @@ function Invoke-MdeApi {
         # Transient gateway errors are retried for GET only. A POST that hit a 504 may
         # already have created its machine action, and resubmitting it is not harmless.
         if ($code -eq 429 -or ($Method -eq 'GET' -and $code -in 502, 503, 504)) {
-            $wait = 0
-            $ra = $resp.Headers.GetEnumerator() | Where-Object { $_.Key -ieq 'Retry-After' } |
-                  Select-Object -First 1
-            if ($ra) {
-                # Retry-After is either delta-seconds or an HTTP-date.
-                $raw = [string]($ra.Value | Select-Object -First 1)
-                $secs = 0
-                $when = [DateTimeOffset]::MinValue
-                if ([int]::TryParse($raw, [ref]$secs)) {
-                    $wait = $secs
-                } elseif ([DateTimeOffset]::TryParse($raw, [Globalization.CultureInfo]::InvariantCulture,
-                        [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$when)) {
-                    $wait = [int][Math]::Ceiling(($when - [DateTimeOffset]::UtcNow).TotalSeconds)
-                }
-            }
+            $wait = Get-RetryAfterSecond $resp
             if ($wait -le 0) { $wait = [Math]::Min(60, [Math]::Pow(2, $attempt + 2)) }
             $why = if ($code -eq 429) { 'Throttled (429)' } else { "HTTP $code" }
             # Cap the wait so a huge Retry-After cannot stall the session with no way out
