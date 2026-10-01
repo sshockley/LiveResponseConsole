@@ -897,9 +897,12 @@ function Invoke-ConsoleLine {
 
     $tokens = @(Split-CommandLine $Line)
     $verb = ([string]$tokens[0]).ToLower()
-    $rest = if ($tokens.Count -gt 1) { ($tokens[1..($tokens.Count - 1)] -join ' ') } else { '' }
-    # $rest has been through the tokenizer, which strips quotes. Verbs that forward
-    # free text to the endpoint need the line exactly as typed.
+    # Arguments after the verb, already unquoted. Use these rather than re-splitting
+    # $rest, which would break a quoted "path with spaces" apart again.
+    $parts = @($tokens | Select-Object -Skip 1)
+    $rest = $parts -join ' '
+    # The tokenizer strips quotes. Verbs that forward free text to the endpoint need
+    # the line exactly as typed.
     $rawRest = if ($Line -match '^\s*\S+\s+(.+)$') { $Matches[1].Trim() } else { '' }
 
     switch ($verb) {
@@ -937,7 +940,6 @@ function Invoke-ConsoleLine {
         'result' {
             # Re-fetch a past action's output. Useful after a permissions fix, or
             # when the local session dropped while the action kept running.
-            $parts = @(Split-CommandLine $rest)
             if (-not $parts) { Write-Usage 'Usage: result <actionId> [index]'; break }
             $aid = $parts[0]
             $idx = if ($parts.Count -gt 1 -and $parts[1] -match '^\d+$') { [int]$parts[1] } else { 0 }
@@ -975,9 +977,8 @@ function Invoke-ConsoleLine {
         }
 
         'cancel' {
-            $parts = @(Split-CommandLine $rest)
             if (-not $parts) { Write-Usage 'Usage: cancel <actionId> [comment]'; break }
-            $c = if ($parts.Count -gt 1) { ($parts[1..($parts.Count - 1)] -join ' ') } else { 'Cancelled by analyst' }
+            $c = if ($parts.Count -gt 1) { @($parts | Select-Object -Skip 1) -join ' ' } else { 'Cancelled by analyst' }
             Invoke-MdeApi -Method POST -Path "api/machineactions/$($parts[0])/cancel" -Body @{ Comment = $c } | Out-Null
             Write-Transcript @{ event = 'cancel'; actionId = $parts[0]; comment = $c }
             Write-Status 'Cancellation requested.' 'Good'
@@ -985,7 +986,6 @@ function Invoke-ConsoleLine {
         }
 
         'library' {
-            $parts = @(Split-CommandLine $rest)
             $force = $parts -contains '--force'
             $parts = @($parts | Where-Object { $_ -ne '--force' })
             $sub = if ($parts.Count -gt 0) { ([string]$parts[0]).ToLower() } else { 'list' }
@@ -993,7 +993,7 @@ function Invoke-ConsoleLine {
                 'upload' {
                     if ($parts.Count -lt 2) { Write-Usage 'Usage: library upload <path> [description] [--force]'; break }
                     $file = (Resolve-Path -LiteralPath $parts[1]).Path
-                    $desc = if ($parts.Count -gt 2) { ($parts[2..($parts.Count - 1)] -join ' ') } else { 'Uploaded by Invoke-MdeLiveResponse.ps1' }
+                    $desc = if ($parts.Count -gt 2) { @($parts | Select-Object -Skip 2) -join ' ' } else { 'Uploaded by Invoke-MdeLiveResponse.ps1' }
                     # The library is tenant-wide, so an overwrite can replace a teammate's script.
                     $leafName = Split-Path $file -Leaf
                     $exists = @((Invoke-MdeApi -Path 'api/libraryfiles').value |

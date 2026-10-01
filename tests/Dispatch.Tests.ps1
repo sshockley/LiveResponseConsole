@@ -323,6 +323,16 @@ Describe 'Invoke-ConsoleLine' {
             Should -Invoke Invoke-MdeApi -Times 1 -ParameterFilter { $Method -eq 'POST' -and $Form.OverrideIfExists -eq 'false' }
         }
 
+        It 'keeps a quoted path and description with spaces intact' {
+            $spaced = Join-Path $TestDrive 'My Tools'
+            New-Item -ItemType Directory -Path $spaced -Force | Out-Null
+            Copy-Item -LiteralPath $script:Upload -Destination $spaced
+            Invoke-ConsoleLine "library upload `"$(Join-Path $spaced 'Tool.ps1')`" `"Triage  helper`"" | Out-Null
+            Should -Invoke Invoke-MdeApi -Times 1 -ParameterFilter {
+                $Method -eq 'POST' -and $Form.file.Name -eq 'Tool.ps1' -and $Form.Description -eq 'Triage  helper'
+            }
+        }
+
         It 'refuses to overwrite under -Command without --force' {
             $script:NonInteractive = $true
             $script:Existing = @('tool.ps1')
@@ -349,6 +359,15 @@ Describe 'Invoke-ConsoleLine' {
             Mock Read-Host { 'y' }
             Invoke-ConsoleLine 'library delete Tool.ps1' | Out-Null
             Should -Invoke Invoke-MdeApi -Times 1 -ParameterFilter { $Method -eq 'DELETE' -and $Path -eq 'api/libraryfiles/Tool.ps1' }
+        }
+    }
+
+    It 'sends a quoted cancel comment as typed' {
+        Mock Invoke-MdeApi {}
+        Mock Write-Transcript {}
+        Invoke-ConsoleLine 'cancel act1 "wrong  host" now' | Out-Null
+        Should -Invoke Invoke-MdeApi -Times 1 -ParameterFilter {
+            $Path -eq 'api/machineactions/act1/cancel' -and $Body.Comment -eq 'wrong  host now'
         }
     }
 
