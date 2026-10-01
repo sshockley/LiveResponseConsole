@@ -990,21 +990,20 @@ function Invoke-ConsoleLine {
             switch ($sub) {
                 'upload' {
                     if ($parts.Count -lt 2) { Write-Usage 'Usage: library upload <path> [description] [--force]'; break }
-                    $file = (Resolve-Path -LiteralPath $parts[1]).Path
+                    $file = Get-Item -LiteralPath $parts[1]
                     $desc = if ($parts.Count -gt 2) { @($parts | Select-Object -Skip 2) -join ' ' } else { 'Uploaded by Invoke-MdeLiveResponse.ps1' }
                     # The library is tenant-wide, so an overwrite can replace a teammate's script.
-                    $leafName = Split-Path $file -Leaf
                     $exists = @((Invoke-MdeApi -Path 'api/libraryfiles').value |
-                        Where-Object { $_.fileName -ieq $leafName }).Count -gt 0
-                    if ($exists -and -not (Confirm-Action "Library file '$leafName' already exists. Overwrite it for the whole tenant?" -Force:$force)) {
+                        Where-Object { $_.fileName -ieq $file.Name }).Count -gt 0
+                    if ($exists -and -not (Confirm-Action "Library file '$($file.Name)' already exists. Overwrite it for the whole tenant?" -Force:$force)) {
                         Write-Status 'Upload cancelled.' 'Warn'
                         break
                     }
                     # Only scripts take parameters. Binaries staged via 'put' do not,
                     # and advertising parameters on them misleads the portal UI.
-                    $isScript = [IO.Path]::GetExtension($file) -in '.ps1', '.psm1'
+                    $isScript = $file.Extension -in '.ps1', '.psm1'
                     $form = @{
-                        file             = Get-Item -LiteralPath $file
+                        file             = $file
                         Description      = $desc
                         HasParameters    = if ($isScript) { 'true' } else { 'false' }
                         OverrideIfExists = if ($exists) { 'true' } else { 'false' }
@@ -1013,11 +1012,10 @@ function Invoke-ConsoleLine {
                     Invoke-MdeApi -Method POST -Path 'api/libraryfiles' -Form $form | Out-Null
                     # Library files run on every device in the tenant, so record exactly what went up.
                     Write-Transcript @{
-                        event = 'library_upload'; fileName = (Split-Path $file -Leaf); source = $file
-                        sha256 = Get-FileSha256 $file
-                        bytes = (Get-Item -LiteralPath $file).Length; description = $desc
+                        event = 'library_upload'; fileName = $file.Name; source = $file.FullName
+                        sha256 = Get-FileSha256 $file.FullName; bytes = $file.Length; description = $desc
                     }
-                    Write-Status "Uploaded $(Split-Path $file -Leaf) to the tenant library." 'Good'
+                    Write-Status "Uploaded $($file.Name) to the tenant library." 'Good'
                 }
                 'delete' {
                     if ($parts.Count -lt 2) { Write-Usage 'Usage: library delete <fileName> [--force]'; break }
