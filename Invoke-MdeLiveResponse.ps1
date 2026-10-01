@@ -41,8 +41,6 @@
     Justification = 'Parameters are read inside nested functions; UseDeviceCode is a parameter-set selector.')]
 [CmdletBinding(DefaultParameterSetName = 'Secret')]
 param(
-    # PSScriptAnalyzer: UseDeviceCode is never read by name because its only job is to
-    # select the 'DeviceCode' parameter.
     [Parameter(Mandatory)][string]$TenantId,
     [Parameter(Mandatory)][string]$ClientId,
 
@@ -626,15 +624,14 @@ function Show-ActionResult {
     if (-not $Action) { return }
 
     if ($Action.commands) {
-        $index = 0
-        foreach ($cmd in $Action.commands) {
-            $type = $cmd.command.type
-            $state = $cmd.commandStatus
-            Write-Status ("[{0}] {1} -> {2}" -f $index, $type, $state) 'Dim'
+        $commands = @($Action.commands)
+        for ($index = 0; $index -lt $commands.Count; $index++) {
+            $type = $commands[$index].command.type
+            Write-Status ("[{0}] {1} -> {2}" -f $index, $type, $commands[$index].commandStatus) 'Dim'
 
             # Only PutFile has no result. A Failed RunScript normally still produced
             # output explaining the failure, so fetch it anyway.
-            if ($type -eq 'PutFile') { $index++; continue }
+            if ($type -eq 'PutFile') { continue }
 
             try {
                 $link = (Invoke-MdeApi -Path "api/machineactions/$($Action.id)/GetLiveResponseResultDownloadLink(index=$index)").value
@@ -642,7 +639,6 @@ function Show-ActionResult {
             } catch {
                 Write-Status "  could not fetch result index $index -- $($_.Exception.Message)" 'Warn'
             }
-            $index++
         }
     }
 
@@ -698,7 +694,7 @@ function Save-GetFileResult {
        -MaxExtractGB, and records both hashes in the transcript. #>
     param([string]$TempFile, [byte[]]$Head, [bool]$IsGzip, [string]$ActionId, [int]$Index)
 
-    if (-not (Test-Path $DownloadPath)) { New-Item -ItemType Directory -Path $DownloadPath -Force | Out-Null }
+    New-Item -ItemType Directory -Path $DownloadPath -Force | Out-Null
     $stem = Get-ResultFileStem -ActionId $ActionId -Index $Index
     # Hash the download as received too, since the saved file is usually ungzipped.
     $rawSha256 = Get-FileSha256 $TempFile
@@ -752,7 +748,7 @@ function Show-RunScriptResult {
     $entry = @{ event = 'runscript_result'; actionId = $ActionId; index = $Index; bytes = $Text.Length }
     if ($SaveOutput) {
         # Saved as received: the file is evidence, and nothing renders it to a terminal here.
-        if (-not (Test-Path $DownloadPath)) { New-Item -ItemType Directory -Path $DownloadPath -Force | Out-Null }
+        New-Item -ItemType Directory -Path $DownloadPath -Force | Out-Null
         $out = Join-Path $DownloadPath ('{0}_output.txt' -f (Get-ResultFileStem -ActionId $ActionId -Index $Index))
         [IO.File]::WriteAllText($out, $Text)
         $entry.savedTo = $out
@@ -880,7 +876,7 @@ function Build-ChainedCommand {
         if ([string]::IsNullOrWhiteSpace($parts[0].Text)) { throw 'run requires a script name from the library.' }
         $p = @(@{ key = 'ScriptName'; value = $parts[0].Text })
         if ($parts.Count -gt 1) {
-            $argTokens = foreach ($t in $parts[1..($parts.Count - 1)]) {
+            $argTokens = foreach ($t in $parts | Select-Object -Skip 1) {
                 if ($t.Quoted) { '"{0}"' -f $t.Text } else { $t.Text }
             }
             $p += @{ key = 'Args'; value = (@($argTokens) -join ' ') }
@@ -1224,7 +1220,7 @@ $script:LogFile = if ($LogPath) { $LogPath } else {
     Join-Path (Get-Location) 'lr-sessions' -AdditionalChildPath ('lr-session-{0}.jsonl' -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
 }
 $logDir = Split-Path -Parent $script:LogFile
-if ($logDir -and -not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+if ($logDir) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
 # Appending to an existing -LogPath continues its chain rather than starting a new one.
 $script:TranscriptHash = $null
 if (Test-Path -LiteralPath $script:LogFile) {
