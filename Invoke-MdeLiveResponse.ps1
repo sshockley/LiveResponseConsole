@@ -362,7 +362,9 @@ function Resolve-MdeMachine {
 
     if (-not $hits) { throw "No onboarded device matches '$Name'." }
 
-    $active = @($hits | Sort-Object { [datetime]$_.lastSeen } -Descending)
+    # ConvertFrom-Json already yields DateTime here. Casting would throw on a device that
+    # has never reported lastSeen.
+    $active = @($hits | Sort-Object lastSeen -Descending)
     if ($active.Count -gt 1) {
         if ($script:NonInteractive) {
             throw "$($active.Count) devices match '$Name'. Use -MachineId or a more specific name when using -Command."
@@ -748,7 +750,7 @@ function Invoke-ConsoleLine {
             # server's ordering is not guaranteed. Over-fetch and sort locally.
             $fetch = [Math]::Max(100, $take)
             @((Invoke-MdeApi -Path "api/machineactions?`$filter=$filter&`$top=$fetch").value) |
-                Sort-Object { [datetime]$_.creationDateTimeUtc } -Descending |
+                Sort-Object creationDateTimeUtc -Descending |
                 Select-Object -First $take |
                 Select-Object id, type, status, requestor, creationDateTimeUtc |
                 Format-Table -AutoSize | Out-Host
