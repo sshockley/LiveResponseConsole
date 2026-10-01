@@ -682,6 +682,14 @@ function Build-ChainedCommand {
     $commands
 }
 
+function Write-Usage {
+    <# A warning at the prompt, but an error under -Command so a typo in a batch fails
+       the run instead of exiting 0. #>
+    param([string]$Message)
+    if ($script:NonInteractive) { throw $Message }
+    Write-Status $Message 'Warn'
+}
+
 function Invoke-ConsoleLine {
     <# Executes one console line, interactive or not. Returns $false when the session
        should end (exit/quit), $true otherwise. Errors propagate to the caller, which
@@ -713,7 +721,7 @@ function Invoke-ConsoleLine {
         }
 
         'open' {
-            if (-not $rest) { Write-Status 'Usage: open <deviceName|machineId>' 'Warn'; break }
+            if (-not $rest) { Write-Usage 'Usage: open <deviceName|machineId>'; break }
             $script:Machine = if ($rest -match '^(?i)[0-9a-f]{40}$') {
                 Resolve-MdeMachine -Id $rest
             } else {
@@ -733,7 +741,7 @@ function Invoke-ConsoleLine {
             # Re-fetch a past action's output. Useful after a permissions fix, or
             # when the local session dropped while the action kept running.
             $parts = @(Split-CommandLine $rest)
-            if (-not $parts) { Write-Status 'Usage: result <actionId> [index]' 'Warn'; break }
+            if (-not $parts) { Write-Usage 'Usage: result <actionId> [index]'; break }
             $aid = $parts[0]
             $idx = if ($parts.Count -gt 1 -and $parts[1] -match '^\d+$') { [int]$parts[1] } else { 0 }
 
@@ -771,7 +779,7 @@ function Invoke-ConsoleLine {
 
         'cancel' {
             $parts = @(Split-CommandLine $rest)
-            if (-not $parts) { Write-Status 'Usage: cancel <actionId> [comment]' 'Warn'; break }
+            if (-not $parts) { Write-Usage 'Usage: cancel <actionId> [comment]'; break }
             $c = if ($parts.Count -gt 1) { ($parts[1..($parts.Count - 1)] -join ' ') } else { 'Cancelled by analyst' }
             Invoke-MdeApi -Method POST -Path "api/machineactions/$($parts[0])/cancel" -Body @{ Comment = $c } | Out-Null
             Write-Status 'Cancellation requested.' 'Good'
@@ -783,7 +791,7 @@ function Invoke-ConsoleLine {
             $sub = if ($parts.Count -gt 0) { ([string]$parts[0]).ToLower() } else { 'list' }
             switch ($sub) {
                 'upload' {
-                    if ($parts.Count -lt 2) { Write-Status 'Usage: library upload <path> [description]' 'Warn'; break }
+                    if ($parts.Count -lt 2) { Write-Usage 'Usage: library upload <path> [description]'; break }
                     $file = (Resolve-Path -LiteralPath $parts[1]).Path
                     $desc = if ($parts.Count -gt 2) { ($parts[2..($parts.Count - 1)] -join ' ') } else { 'Uploaded by Invoke-MdeLiveResponse.ps1' }
                     # Only scripts take parameters. Binaries staged via 'put' do not,
@@ -800,7 +808,7 @@ function Invoke-ConsoleLine {
                     Write-Status "Uploaded $(Split-Path $file -Leaf) to the tenant library." 'Good'
                 }
                 'delete' {
-                    if ($parts.Count -lt 2) { Write-Status 'Usage: library delete <fileName>' 'Warn'; break }
+                    if ($parts.Count -lt 2) { Write-Usage 'Usage: library delete <fileName>'; break }
                     $target = [uri]::EscapeDataString($parts[1])
                     Invoke-MdeApi -Method DELETE -Path "api/libraryfiles/$target" | Out-Null
                     Write-Status "Deleted $($parts[1])." 'Good'
@@ -815,7 +823,7 @@ function Invoke-ConsoleLine {
         }
 
         'cmd' {
-            if (-not $rawRest) { Write-Status 'Usage: cmd <powershell expression>' 'Warn'; break }
+            if (-not $rawRest) { Write-Usage 'Usage: cmd <powershell expression>'; break }
             $commands = @(@{
                 type   = 'RunScript'
                 params = @(
@@ -833,13 +841,13 @@ function Invoke-ConsoleLine {
             # literal "--get" argument from the chain separator.
             $normalized = '--{0} {1}' -f $verb, $rawRest
             $commands = @(Build-ChainedCommand $normalized)
-            if (-not $commands) { Write-Status 'Nothing to submit.' 'Warn'; break }
+            if (-not $commands) { Write-Usage 'Nothing to submit.'; break }
             Show-ActionResult (Invoke-LiveResponseAction -Commands $commands -ActionComment $script:SessionComment)
             break
         }
 
         default {
-            Write-Status "Unknown command '$verb'. The API has no shell passthrough -- use 'cmd <powershell>' or 'help'." 'Warn'
+            Write-Usage "Unknown command '$verb'. The API has no shell passthrough -- use 'cmd <powershell>' or 'help'."
         }
     }
     return $true

@@ -76,6 +76,7 @@ Pass `-Command` with one or more commands to run (in order) in one request.
 
 - Exit code is `0` if every line ran without a local error and every submitted action
   reached `Succeeded`, otherwise `1`. A failing line does not stop the remaining lines.
+  Unknown verbs and usage errors count as failures.
 - `-DeviceName` or `-MachineId` is required. An ambiguous device name is an error rather
   than a prompt.
 - The transcript is written as usual; `session_start` carries `mode: command`.
