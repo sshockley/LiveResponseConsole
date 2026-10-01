@@ -21,7 +21,7 @@ BeforeAll {
     }
 
     foreach ($name in 'Receive-LiveResponseResult', 'Get-GzipOriginalName', 'Remove-ControlCharacter',
-        'ConvertTo-SafeFileName', 'Copy-StreamBounded') {
+        'ConvertTo-SafeFileName', 'Copy-StreamBounded', 'Open-GzipFile') {
         $fn = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name

@@ -181,6 +181,12 @@ function ConvertTo-SafeFileName {
     [regex]::Replace($Name, '[\x00-\x1f\x7f-\x9f<>:"/\\|?*]', '_')
 }
 
+function Open-GzipFile {
+    <# Opens a gzip file for decompression. Disposing the result also closes the file. #>
+    param([string]$Path)
+    [IO.Compression.GZipStream]::new([IO.File]::OpenRead($Path), [IO.Compression.CompressionMode]::Decompress)
+}
+
 function Copy-StreamBounded {
     <# Copies From to To, stopping once more than Limit bytes have been read. Returns
        $true if the whole stream fit. Guards against gzip bombs from the endpoint. #>
@@ -661,14 +667,14 @@ function Receive-LiveResponseResult {
                 $orig = ConvertTo-SafeFileName $orig
                 $leaf = if ($orig) { '{0}_{1}' -f $stem, $orig } else { $stem }
                 $out = Join-Path $DownloadPath $leaf
-                $in = $gz = $fs = $null
+                $gz = Open-GzipFile $tmp
+                $fs = $null
                 try {
-                    $in = [IO.File]::OpenRead($tmp)
-                    $gz = [IO.Compression.GZipStream]::new($in, [IO.Compression.CompressionMode]::Decompress)
                     $fs = [IO.File]::Create($out)
                     $extracted = Copy-StreamBounded -From $gz -To $fs -Limit ([long]$MaxExtractGB * 1GB)
                 } finally {
-                    foreach ($s in $fs, $gz, $in) { if ($s) { $s.Dispose() } }
+                    if ($fs) { $fs.Dispose() }
+                    $gz.Dispose()
                 }
                 if ($extracted) {
                     Write-Status "  collected -> $out ($([math]::Round([IO.FileInfo]::new($out).Length/1KB,1)) KB, ungzipped)" 'Good'
@@ -701,15 +707,8 @@ function Receive-LiveResponseResult {
 
         # RunScript: result is text (usually JSON with script_output / script_errors)
         $text = if ($isGzip) {
-            $in = $gz = $sr = $null
-            try {
-                $in = [IO.File]::OpenRead($tmp)
-                $gz = [IO.Compression.GZipStream]::new($in, [IO.Compression.CompressionMode]::Decompress)
-                $sr = [IO.StreamReader]::new($gz)
-                $sr.ReadToEnd()
-            } finally {
-                foreach ($s in $sr, $gz, $in) { if ($s) { $s.Dispose() } }
-            }
+            $sr = [IO.StreamReader]::new((Open-GzipFile $tmp))
+            try { $sr.ReadToEnd() } finally { $sr.Dispose() }
         } else {
             [IO.File]::ReadAllText($tmp)
         }
