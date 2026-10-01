@@ -319,8 +319,7 @@ function Request-Token {
                     resource  = $script:Cfg.Resource
                 }
                 Write-Status $dc.message 'Warn'
-                $dcInterval = if ($dc.PSObject.Properties.Name -contains 'interval' -and [int]$dc.interval -gt 0) {
-                    [int]$dc.interval } else { 5 }
+                $dcInterval = if ([int]$dc.interval -gt 0) { [int]$dc.interval } else { 5 }
                 $deadline = (Get-Date).AddSeconds([int]$dc.expires_in)
                 while (-not $resp -and (Get-Date) -lt $deadline) {
                     Start-Sleep -Seconds $dcInterval
@@ -342,7 +341,7 @@ function Request-Token {
             }
 
             # Entra may rotate the refresh token, so always keep the newest one.
-            if ($resp.PSObject.Properties.Name -contains 'refresh_token' -and $resp.refresh_token) {
+            if ($resp.refresh_token) {
                 $script:RefreshToken = $resp.refresh_token
             }
         }
@@ -607,8 +606,7 @@ function Show-ActionResult {
 
     if (-not $Action) { return }
 
-    $hasCommands = $Action.PSObject.Properties.Name -contains 'commands'
-    if ($hasCommands -and $Action.commands) {
+    if ($Action.commands) {
         $index = 0
         foreach ($cmd in $Action.commands) {
             $type = $cmd.command.type
@@ -629,8 +627,7 @@ function Show-ActionResult {
         }
     }
 
-    if ($Action.status -ne 'Succeeded' -and
-        ($Action.PSObject.Properties.Name -contains 'errorHResult') -and $Action.errorHResult) {
+    if ($Action.status -ne 'Succeeded' -and $Action.errorHResult) {
         Write-Status "  errorHResult: $($Action.errorHResult)" 'Bad'
     }
 }
@@ -739,20 +736,17 @@ function Receive-LiveResponseResult {
     try {
         $json = $text | ConvertFrom-Json
         foreach ($field in 'script_output', 'output', 'script_errors', 'errors', 'exit_code') {
-            if ($json.PSObject.Properties.Name -contains $field) {
-                # Sanitize decoded JSON string
-                $val = Remove-ControlCharacter "$($json.$field)"
-                if ($null -ne $val -and "$val".Trim()) {
-                    $lvl = if ($field -match 'error') { 'Bad' } else { 'Dim' }
-                    if ($field -match 'output') {
-                        Write-Host $val
-                        $shown.Add($val)
-                    } else {
-                        $line = '  {0}: {1}' -f $field, $val
-                        Write-Status $line $lvl
-                        $shown.Add($line)
-                    }
-                }
+            # Sanitize decoded JSON string. A missing field reads as $null, so it is skipped.
+            $val = Remove-ControlCharacter "$($json.$field)"
+            if (-not $val.Trim()) { continue }
+            if ($field -match 'output') {
+                Write-Host $val
+                $shown.Add($val)
+            } else {
+                $lvl = if ($field -match 'error') { 'Bad' } else { 'Dim' }
+                $line = '  {0}: {1}' -f $field, $val
+                Write-Status $line $lvl
+                $shown.Add($line)
             }
         }
     } catch {
@@ -946,7 +940,7 @@ function Invoke-ConsoleLine {
 
             $act = Invoke-MdeApi -Path "api/machineactions/$aid"
             $ctype = 'RunScript'
-            if ($act.PSObject.Properties.Name -contains 'commands' -and $act.commands) {
+            if ($act.commands) {
                 $c = @($act.commands)[$idx]
                 if ($c) { $ctype = $c.command.type }
             }
