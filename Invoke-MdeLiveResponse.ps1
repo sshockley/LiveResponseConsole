@@ -871,6 +871,7 @@ function Invoke-ConsoleLine {
             } else {
                 Resolve-MdeMachine -Name $rest
             }
+            Write-Transcript @{ event = 'retarget'; machine = $script:Machine.computerDnsName; machineId = $script:Machine.id }
             Write-Status "Now targeting $($script:Machine.computerDnsName)" 'Good'
             break
         }
@@ -926,6 +927,7 @@ function Invoke-ConsoleLine {
             if (-not $parts) { Write-Usage 'Usage: cancel <actionId> [comment]'; break }
             $c = if ($parts.Count -gt 1) { ($parts[1..($parts.Count - 1)] -join ' ') } else { 'Cancelled by analyst' }
             Invoke-MdeApi -Method POST -Path "api/machineactions/$($parts[0])/cancel" -Body @{ Comment = $c } | Out-Null
+            Write-Transcript @{ event = 'cancel'; actionId = $parts[0]; comment = $c }
             Write-Status 'Cancellation requested.' 'Good'
             break
         }
@@ -949,12 +951,19 @@ function Invoke-ConsoleLine {
                     }
                     if ($isScript) { $form.ParametersDescription = 'Passed through the Args parameter' }
                     Invoke-MdeApi -Method POST -Path 'api/libraryfiles' -Form $form | Out-Null
+                    # Library files run on every device in the tenant, so record exactly what went up.
+                    Write-Transcript @{
+                        event = 'library_upload'; fileName = (Split-Path $file -Leaf); source = $file
+                        sha256 = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLower()
+                        bytes = (Get-Item -LiteralPath $file).Length; description = $desc
+                    }
                     Write-Status "Uploaded $(Split-Path $file -Leaf) to the tenant library." 'Good'
                 }
                 'delete' {
                     if ($parts.Count -lt 2) { Write-Usage 'Usage: library delete <fileName>'; break }
                     $target = [uri]::EscapeDataString($parts[1])
                     Invoke-MdeApi -Method DELETE -Path "api/libraryfiles/$target" | Out-Null
+                    Write-Transcript @{ event = 'library_delete'; fileName = $parts[1] }
                     Write-Status "Deleted $($parts[1])." 'Good'
                 }
                 default {
