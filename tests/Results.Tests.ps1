@@ -20,7 +20,8 @@ BeforeAll {
         throw "Parse errors in ${scriptPath}: $($parseErrors | ForEach-Object { $_.Message } | Out-String)"
     }
 
-    foreach ($name in 'Receive-LiveResponseResult', 'Get-GzipOriginalName', 'Remove-ControlCharacter',
+    foreach ($name in 'Receive-LiveResponseResult', 'Save-GetFileResult', 'Show-RunScriptResult',
+        'Get-ResultFileStem', 'Get-GzipOriginalName', 'Remove-ControlCharacter',
         'ConvertTo-SafeFileName', 'Copy-StreamBounded', 'Open-GzipFile',
         'Get-FileSha256') {
         $fn = $ast.Find({

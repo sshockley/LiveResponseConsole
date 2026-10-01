@@ -669,52 +669,7 @@ function Receive-LiveResponseResult {
         $isGzip = $head.Length -gt 2 -and $head[0] -eq 0x1f -and $head[1] -eq 0x8b
 
         if ($CommandType -eq 'GetFile') {
-            if (-not (Test-Path $DownloadPath)) { New-Item -ItemType Directory -Path $DownloadPath -Force | Out-Null }
-            $stem = '{0}_{1}_{2}' -f (ConvertTo-SafeFileName $script:Machine.computerDnsName), $ActionId.Substring(0, 8), $Index
-            # Hash the download as received too, since the saved file is usually ungzipped.
-            $rawSha256 = Get-FileSha256 $tmp
-            $rawLength = (Get-Item -LiteralPath $tmp).Length
-            $extracted = $false
-            if ($isGzip) {
-                $orig = Get-GzipOriginalName -Bytes $head
-                $orig = ConvertTo-SafeFileName $orig
-                $leaf = if ($orig) { '{0}_{1}' -f $stem, $orig } else { $stem }
-                $out = Join-Path $DownloadPath $leaf
-                $gz = Open-GzipFile $tmp
-                $fs = $null
-                try {
-                    $fs = [IO.File]::Create($out)
-                    $extracted = Copy-StreamBounded -From $gz -To $fs -Limit ([long]$MaxExtractGB * 1GB)
-                } finally {
-                    if ($fs) { $fs.Dispose() }
-                    $gz.Dispose()
-                }
-                if ($extracted) {
-                    Write-Status "  collected -> $out ($([math]::Round([IO.FileInfo]::new($out).Length/1KB,1)) KB, ungzipped)" 'Good'
-                } else {
-                    [IO.File]::Delete($out)
-                    $out = "$out.gz"
-                    Copy-Item -LiteralPath $tmp $out -Force
-                    Write-Status "  ungzipped size exceeds -MaxExtractGB $MaxExtractGB; kept as received -> $out" 'Warn'
-                }
-            } else {
-                $out = Join-Path $DownloadPath "$stem.bin"
-                Copy-Item -LiteralPath $tmp $out -Force
-                Write-Status "  collected -> $out" 'Good'
-            }
-
-            # Hash what was written to disk so the transcript can stand as evidence that the
-            # file examined later is the file that was collected. Sizes come from .NET rather
-            # than Get-Item, which on Linux fails to find a name starting with '..' (a
-            # sanitized device name can).
-            $sha256 = Get-FileSha256 $out
-            $length = [IO.FileInfo]::new($out).Length
-            Write-Status "  sha256 $sha256" 'Dim'
-            if ($extracted) { Write-Status "  sha256 $rawSha256 (as received)" 'Dim' }
-            Write-Transcript @{
-                event = 'getfile'; actionId = $ActionId; index = $Index; savedTo = $out; sha256 = $sha256; bytes = $length
-                rawSha256 = $rawSha256; rawBytes = $rawLength; ungzipped = $extracted
-            }
+            Save-GetFileResult -TempFile $tmp -Head $head -IsGzip $isGzip -ActionId $ActionId -Index $Index
             return
         }
 
@@ -729,24 +684,88 @@ function Receive-LiveResponseResult {
         Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
     }
 
-    $entry = @{ event = 'runscript_result'; actionId = $ActionId; index = $Index; bytes = $text.Length }
+    Show-RunScriptResult -Text $text -ActionId $ActionId -Index $Index
+}
+
+function Get-ResultFileStem {
+    <# The name every saved result starts with: device, short action id, command index. #>
+    param([string]$ActionId, [int]$Index)
+    '{0}_{1}_{2}' -f (ConvertTo-SafeFileName $script:Machine.computerDnsName), $ActionId.Substring(0, 8), $Index
+}
+
+function Save-GetFileResult {
+    <# Saves a downloaded GetFile result under -DownloadPath, ungzipped when it fits under
+       -MaxExtractGB, and records both hashes in the transcript. #>
+    param([string]$TempFile, [byte[]]$Head, [bool]$IsGzip, [string]$ActionId, [int]$Index)
+
+    if (-not (Test-Path $DownloadPath)) { New-Item -ItemType Directory -Path $DownloadPath -Force | Out-Null }
+    $stem = Get-ResultFileStem -ActionId $ActionId -Index $Index
+    # Hash the download as received too, since the saved file is usually ungzipped.
+    $rawSha256 = Get-FileSha256 $TempFile
+    $rawLength = (Get-Item -LiteralPath $TempFile).Length
+    $extracted = $false
+    if ($IsGzip) {
+        $orig = ConvertTo-SafeFileName (Get-GzipOriginalName -Bytes $Head)
+        $leaf = if ($orig) { '{0}_{1}' -f $stem, $orig } else { $stem }
+        $out = Join-Path $DownloadPath $leaf
+        $gz = Open-GzipFile $TempFile
+        $fs = $null
+        try {
+            $fs = [IO.File]::Create($out)
+            $extracted = Copy-StreamBounded -From $gz -To $fs -Limit ([long]$MaxExtractGB * 1GB)
+        } finally {
+            if ($fs) { $fs.Dispose() }
+            $gz.Dispose()
+        }
+        if ($extracted) {
+            Write-Status "  collected -> $out ($([math]::Round([IO.FileInfo]::new($out).Length/1KB,1)) KB, ungzipped)" 'Good'
+        } else {
+            [IO.File]::Delete($out)
+            $out = "$out.gz"
+            Copy-Item -LiteralPath $TempFile $out -Force
+            Write-Status "  ungzipped size exceeds -MaxExtractGB $MaxExtractGB; kept as received -> $out" 'Warn'
+        }
+    } else {
+        $out = Join-Path $DownloadPath "$stem.bin"
+        Copy-Item -LiteralPath $TempFile $out -Force
+        Write-Status "  collected -> $out" 'Good'
+    }
+
+    # Hash what was written to disk so the transcript can stand as evidence that the
+    # file examined later is the file that was collected. Sizes come from .NET rather
+    # than Get-Item, which on Linux fails to find a name starting with '..' (a
+    # sanitized device name can).
+    $sha256 = Get-FileSha256 $out
+    $length = [IO.FileInfo]::new($out).Length
+    Write-Status "  sha256 $sha256" 'Dim'
+    if ($extracted) { Write-Status "  sha256 $rawSha256 (as received)" 'Dim' }
+    Write-Transcript @{
+        event = 'getfile'; actionId = $ActionId; index = $Index; savedTo = $out; sha256 = $sha256; bytes = $length
+        rawSha256 = $rawSha256; rawBytes = $rawLength; ungzipped = $extracted
+    }
+}
+
+function Show-RunScriptResult {
+    <# Prints a RunScript result, sanitized, and caches what was shown for 'last'. #>
+    param([string]$Text, [string]$ActionId, [int]$Index)
+
+    $entry = @{ event = 'runscript_result'; actionId = $ActionId; index = $Index; bytes = $Text.Length }
     if ($SaveOutput) {
         # Saved as received: the file is evidence, and nothing renders it to a terminal here.
         if (-not (Test-Path $DownloadPath)) { New-Item -ItemType Directory -Path $DownloadPath -Force | Out-Null }
-        $out = Join-Path $DownloadPath ('{0}_{1}_{2}_output.txt' -f
-            (ConvertTo-SafeFileName $script:Machine.computerDnsName), $ActionId.Substring(0, 8), $Index)
-        [IO.File]::WriteAllText($out, $text)
+        $out = Join-Path $DownloadPath ('{0}_output.txt' -f (Get-ResultFileStem -ActionId $ActionId -Index $Index))
+        [IO.File]::WriteAllText($out, $Text)
         $entry.savedTo = $out
         $entry.sha256 = Get-FileSha256 $out
     }
 
     # Remove terminal escape sequences before they reach the console, the 'last' cache, or the transcript.
-    $text = Remove-ControlCharacter $text
+    $Text = Remove-ControlCharacter $Text
 
     # Keep what was shown, not the raw JSON envelope, so 'last' reprints the same view.
     $shown = [System.Collections.Generic.List[string]]::new()
     try {
-        $json = $text | ConvertFrom-Json
+        $json = $Text | ConvertFrom-Json
         foreach ($field in 'script_output', 'output', 'script_errors', 'errors', 'exit_code') {
             # Sanitize decoded JSON string. A missing field reads as $null, so it is skipped.
             $val = Remove-ControlCharacter "$($json.$field)"
@@ -766,8 +785,8 @@ function Receive-LiveResponseResult {
     }
 
     if ($shown.Count -eq 0) {
-        Write-Host $text
-        $shown.Add($text)
+        Write-Host $Text
+        $shown.Add($Text)
     }
     $script:LastResult = $shown -join [Environment]::NewLine
     if ($entry.savedTo) { Write-Status "  saved -> $($entry.savedTo)" 'Dim' }
@@ -892,6 +911,63 @@ function Confirm-Action {
     (Read-Host "$Prompt [y/N]") -match '^\s*y(es)?\s*$'
 }
 
+function Invoke-LibraryCommand {
+    <# The 'library' verb: list, upload or delete tenant library files. Parts are the
+       already-unquoted arguments after 'library'; --force skips the confirmations. #>
+    param([string[]]$Parts)
+
+    $force = $Parts -contains '--force'
+    $Parts = @($Parts | Where-Object { $_ -ne '--force' })
+    $sub = if ($Parts.Count -gt 0) { ([string]$Parts[0]).ToLower() } else { 'list' }
+    switch ($sub) {
+        'upload' {
+            if ($Parts.Count -lt 2) { Write-Usage 'Usage: library upload <path> [description] [--force]'; break }
+            $file = Get-Item -LiteralPath $Parts[1]
+            $desc = if ($Parts.Count -gt 2) { @($Parts | Select-Object -Skip 2) -join ' ' } else { 'Uploaded by Invoke-MdeLiveResponse.ps1' }
+            # The library is tenant-wide, so an overwrite can replace a teammate's script.
+            $exists = @((Invoke-MdeApi -Path 'api/libraryfiles').value |
+                Where-Object { $_.fileName -ieq $file.Name }).Count -gt 0
+            if ($exists -and -not (Confirm-Action "Library file '$($file.Name)' already exists. Overwrite it for the whole tenant?" -Force:$force)) {
+                Write-Status 'Upload cancelled.' 'Warn'
+                break
+            }
+            # Only scripts take parameters. Binaries staged via 'put' do not,
+            # and advertising parameters on them misleads the portal UI.
+            $isScript = $file.Extension -in '.ps1', '.psm1'
+            $form = @{
+                file             = $file
+                Description      = $desc
+                HasParameters    = if ($isScript) { 'true' } else { 'false' }
+                OverrideIfExists = if ($exists) { 'true' } else { 'false' }
+            }
+            if ($isScript) { $form.ParametersDescription = 'Passed through the Args parameter' }
+            Invoke-MdeApi -Method POST -Path 'api/libraryfiles' -Form $form | Out-Null
+            # Library files run on every device in the tenant, so record exactly what went up.
+            Write-Transcript @{
+                event = 'library_upload'; fileName = $file.Name; source = $file.FullName
+                sha256 = Get-FileSha256 $file.FullName; bytes = $file.Length; description = $desc
+            }
+            Write-Status "Uploaded $($file.Name) to the tenant library." 'Good'
+        }
+        'delete' {
+            if ($Parts.Count -lt 2) { Write-Usage 'Usage: library delete <fileName> [--force]'; break }
+            if (-not (Confirm-Action "Delete library file '$($Parts[1])' for the whole tenant?" -Force:$force)) {
+                Write-Status 'Delete cancelled.' 'Warn'
+                break
+            }
+            $target = [uri]::EscapeDataString($Parts[1])
+            Invoke-MdeApi -Method DELETE -Path "api/libraryfiles/$target" | Out-Null
+            Write-Transcript @{ event = 'library_delete'; fileName = $Parts[1] }
+            Write-Status "Deleted $($Parts[1])." 'Good'
+        }
+        default {
+            (Invoke-MdeApi -Path 'api/libraryfiles').value |
+                Select-Object fileName, hasParameters, createdBy, lastUpdatedTime, description |
+                Format-Table -AutoSize | Out-Host
+        }
+    }
+}
+
 function Invoke-ConsoleLine {
     <# Executes one console line, interactive or not. Returns $false when the session
        should end (exit/quit), $true otherwise. Errors propagate to the caller, which
@@ -988,56 +1064,7 @@ function Invoke-ConsoleLine {
         }
 
         'library' {
-            $force = $parts -contains '--force'
-            $parts = @($parts | Where-Object { $_ -ne '--force' })
-            $sub = if ($parts.Count -gt 0) { ([string]$parts[0]).ToLower() } else { 'list' }
-            switch ($sub) {
-                'upload' {
-                    if ($parts.Count -lt 2) { Write-Usage 'Usage: library upload <path> [description] [--force]'; break }
-                    $file = Get-Item -LiteralPath $parts[1]
-                    $desc = if ($parts.Count -gt 2) { @($parts | Select-Object -Skip 2) -join ' ' } else { 'Uploaded by Invoke-MdeLiveResponse.ps1' }
-                    # The library is tenant-wide, so an overwrite can replace a teammate's script.
-                    $exists = @((Invoke-MdeApi -Path 'api/libraryfiles').value |
-                        Where-Object { $_.fileName -ieq $file.Name }).Count -gt 0
-                    if ($exists -and -not (Confirm-Action "Library file '$($file.Name)' already exists. Overwrite it for the whole tenant?" -Force:$force)) {
-                        Write-Status 'Upload cancelled.' 'Warn'
-                        break
-                    }
-                    # Only scripts take parameters. Binaries staged via 'put' do not,
-                    # and advertising parameters on them misleads the portal UI.
-                    $isScript = $file.Extension -in '.ps1', '.psm1'
-                    $form = @{
-                        file             = $file
-                        Description      = $desc
-                        HasParameters    = if ($isScript) { 'true' } else { 'false' }
-                        OverrideIfExists = if ($exists) { 'true' } else { 'false' }
-                    }
-                    if ($isScript) { $form.ParametersDescription = 'Passed through the Args parameter' }
-                    Invoke-MdeApi -Method POST -Path 'api/libraryfiles' -Form $form | Out-Null
-                    # Library files run on every device in the tenant, so record exactly what went up.
-                    Write-Transcript @{
-                        event = 'library_upload'; fileName = $file.Name; source = $file.FullName
-                        sha256 = Get-FileSha256 $file.FullName; bytes = $file.Length; description = $desc
-                    }
-                    Write-Status "Uploaded $($file.Name) to the tenant library." 'Good'
-                }
-                'delete' {
-                    if ($parts.Count -lt 2) { Write-Usage 'Usage: library delete <fileName> [--force]'; break }
-                    if (-not (Confirm-Action "Delete library file '$($parts[1])' for the whole tenant?" -Force:$force)) {
-                        Write-Status 'Delete cancelled.' 'Warn'
-                        break
-                    }
-                    $target = [uri]::EscapeDataString($parts[1])
-                    Invoke-MdeApi -Method DELETE -Path "api/libraryfiles/$target" | Out-Null
-                    Write-Transcript @{ event = 'library_delete'; fileName = $parts[1] }
-                    Write-Status "Deleted $($parts[1])." 'Good'
-                }
-                default {
-                    (Invoke-MdeApi -Path 'api/libraryfiles').value |
-                        Select-Object fileName, hasParameters, createdBy, lastUpdatedTime, description |
-                        Format-Table -AutoSize | Out-Host
-                }
-            }
+            Invoke-LibraryCommand $parts
             break
         }
 
