@@ -2,5 +2,6 @@ Local/*
 *.cer
 *.pfx
 lr-session-*.jsonl
+lr-sessions/
 lr-downloads/
 Run-LR.ps1

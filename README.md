@@ -135,7 +135,7 @@ put winpmem.exe --run Dump-Memory.ps1 -full --get C:\Windows\Temp\mem.raw.gz
 - `GetFile` results ungzip into `./lr-downloads` (`-DownloadPath`). Anything that would
   ungzip past `-MaxExtractGB` (default 50) is kept as the received `.gz`. The transcript
   records SHA-256 of both the saved file and the download as received
-- Session transcript: `./lr-session-<timestamp>.jsonl` (`-LogPath`). Useful as case evidence,
+- Session transcript: `./lr-sessions/lr-session-<timestamp>.jsonl` (`-LogPath`). Useful as case evidence,
   since tenant-side you otherwise only have the Action center record. It records the tenant,
   app ID and auth mode at session start, and each action's ID and comment when queued.
   Each line carries the SHA-256 of the line before it, so `./Test-LRTranscript.ps1 <file>`

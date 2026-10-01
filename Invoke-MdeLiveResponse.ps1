@@ -1193,8 +1193,10 @@ $script:LastResult = $null
 $script:RefreshToken = $null
 $script:FailedActions = 0
 $script:LogFile = if ($LogPath) { $LogPath } else {
-    Join-Path (Get-Location) ('lr-session-{0}.jsonl' -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    Join-Path (Get-Location) 'lr-sessions' -AdditionalChildPath ('lr-session-{0}.jsonl' -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
 }
+$logDir = Split-Path -Parent $script:LogFile
+if ($logDir -and -not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
 # Appending to an existing -LogPath continues its chain rather than starting a new one.
 $script:TranscriptHash = $null
 if (Test-Path -LiteralPath $script:LogFile) {
