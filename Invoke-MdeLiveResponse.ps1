@@ -170,6 +170,16 @@ function Remove-ControlCharacter {
         [string][char]0xFFFD)
 }
 
+function ConvertTo-SafeFileName {
+    <# Replaces anything that is not a plain filename character with '_'. Used for
+       endpoint-supplied strings (gzip FNAME, the device's own reported hostname), which
+       on a compromised host are attacker-controlled. Covers C1 controls because an
+       ISO-8859-1 decode can yield 0x9B (8-bit CSI). #>
+    param([string]$Name)
+    if (-not $Name) { return $Name }
+    [regex]::Replace($Name, '[\x00-\x1f\x7f-\x9f<>:"/\\|?*]', '_')
+}
+
 function Copy-StreamBounded {
     <# Copies From to To, stopping once more than Limit bytes have been read. Returns
        $true if the whole stream fit. Guards against gzip bombs from the endpoint. #>
@@ -622,16 +632,14 @@ function Receive-LiveResponseResult {
 
         if ($CommandType -eq 'GetFile') {
             if (-not (Test-Path $DownloadPath)) { New-Item -ItemType Directory -Path $DownloadPath -Force | Out-Null }
-            $stem = '{0}_{1}_{2}' -f $script:Machine.computerDnsName, $ActionId.Substring(0, 8), $Index
+            $stem = '{0}_{1}_{2}' -f (ConvertTo-SafeFileName $script:Machine.computerDnsName), $ActionId.Substring(0, 8), $Index
             # Hash the download as received too, since the saved file is usually ungzipped.
             $rawSha256 = (Get-FileHash -LiteralPath $tmp -Algorithm SHA256).Hash.ToLower()
             $rawLength = (Get-Item -LiteralPath $tmp).Length
             $extracted = $false
             if ($isGzip) {
                 $orig = Get-GzipOriginalName -Bytes $head
-                # FNAME is endpoint-supplied. Strip anything that is not a plain filename char,
-                # including C1 controls: the ISO-8859-1 decode can yield 0x9B (8-bit CSI).
-                if ($orig) { $orig = [regex]::Replace($orig, '[\x00-\x1f\x7f-\x9f<>:"/\\|?*]', '_') }
+                $orig = ConvertTo-SafeFileName $orig
                 $leaf = if ($orig) { '{0}_{1}' -f $stem, $orig } else { $stem }
                 $out = Join-Path $DownloadPath $leaf
                 $in = $gz = $fs = $null
@@ -693,7 +701,7 @@ function Receive-LiveResponseResult {
         # Saved as received: the file is evidence, and nothing renders it to a terminal here.
         if (-not (Test-Path $DownloadPath)) { New-Item -ItemType Directory -Path $DownloadPath -Force | Out-Null }
         $out = Join-Path $DownloadPath ('{0}_{1}_{2}_output.txt' -f
-            $script:Machine.computerDnsName, $ActionId.Substring(0, 8), $Index)
+            (ConvertTo-SafeFileName $script:Machine.computerDnsName), $ActionId.Substring(0, 8), $Index)
         [IO.File]::WriteAllText($out, $text)
         $entry.savedTo = $out
         $entry.sha256 = (Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToLower()

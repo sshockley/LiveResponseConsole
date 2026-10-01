@@ -16,7 +16,7 @@ BeforeAll {
     }
 
     foreach ($name in 'Split-CommandLine', 'Build-ChainedCommand', 'Get-GzipOriginalName', 'Remove-ControlCharacter',
-        'Copy-StreamBounded', 'Get-LineHash', 'Write-Transcript') {
+        'Copy-StreamBounded', 'Get-LineHash', 'Write-Transcript', 'ConvertTo-SafeFileName') {
         $fn = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -207,6 +207,17 @@ Describe 'Copy-StreamBounded' {
         $from = [IO.MemoryStream]::new([byte[]](1..10))
         $to = [IO.MemoryStream]::new()
         Copy-StreamBounded -From $from -To $to -Limit 9 | Should -BeFalse
+    }
+}
+
+Describe 'ConvertTo-SafeFileName' {
+    It 'replaces path separators, reserved characters and controls' {
+        $in = '..\x/y:z*?' + [char]0x1b + [char]0x9b + 'end'
+        ConvertTo-SafeFileName $in | Should -Be '.._x_y_z____end'
+    }
+
+    It 'leaves an ordinary hostname alone' {
+        ConvertTo-SafeFileName 'ws-eng-042.corp.example.com' | Should -Be 'ws-eng-042.corp.example.com'
     }
 }
 
