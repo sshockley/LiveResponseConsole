@@ -950,6 +950,7 @@ $script:NonInteractive = $Command.Count -gt 0
 if (-not $DeviceName -and -not $MachineId) {
     if ($script:NonInteractive) { throw '-Command requires -DeviceName or -MachineId.' }
     $DeviceName = Read-Host 'Device name (or machine id)'
+    if ($DeviceName -match '^(?i)\s*[0-9a-f]{40}\s*$') { $MachineId = $DeviceName.Trim() }
 }
 
 $script:AuthMode = $PSCmdlet.ParameterSetName
