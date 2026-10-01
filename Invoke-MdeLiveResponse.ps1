@@ -122,6 +122,11 @@ function Get-LineHash {
     [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Line))).ToLower()
 }
 
+function Get-FileSha256 {
+    param([string]$Path)
+    (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLower()
+}
+
 function Write-Transcript {
     <# Appends one JSON line. Each line carries 'prev', the SHA-256 of the line before it,
        so editing or removing a line breaks the chain (see Test-LRTranscript.ps1). #>
@@ -659,7 +664,7 @@ function Receive-LiveResponseResult {
             if (-not (Test-Path $DownloadPath)) { New-Item -ItemType Directory -Path $DownloadPath -Force | Out-Null }
             $stem = '{0}_{1}_{2}' -f (ConvertTo-SafeFileName $script:Machine.computerDnsName), $ActionId.Substring(0, 8), $Index
             # Hash the download as received too, since the saved file is usually ungzipped.
-            $rawSha256 = (Get-FileHash -LiteralPath $tmp -Algorithm SHA256).Hash.ToLower()
+            $rawSha256 = Get-FileSha256 $tmp
             $rawLength = (Get-Item -LiteralPath $tmp).Length
             $extracted = $false
             if ($isGzip) {
@@ -694,7 +699,7 @@ function Receive-LiveResponseResult {
             # file examined later is the file that was collected. Sizes come from .NET rather
             # than Get-Item, which on Linux fails to find a name starting with '..' (a
             # sanitized device name can).
-            $sha256 = (Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToLower()
+            $sha256 = Get-FileSha256 $out
             $length = [IO.FileInfo]::new($out).Length
             Write-Status "  sha256 $sha256" 'Dim'
             if ($extracted) { Write-Status "  sha256 $rawSha256 (as received)" 'Dim' }
@@ -724,7 +729,7 @@ function Receive-LiveResponseResult {
             (ConvertTo-SafeFileName $script:Machine.computerDnsName), $ActionId.Substring(0, 8), $Index)
         [IO.File]::WriteAllText($out, $text)
         $entry.savedTo = $out
-        $entry.sha256 = (Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToLower()
+        $entry.sha256 = Get-FileSha256 $out
     }
 
     # Remove terminal escape sequences before they reach the console, the 'last' cache, or the transcript.
@@ -1009,7 +1014,7 @@ function Invoke-ConsoleLine {
                     # Library files run on every device in the tenant, so record exactly what went up.
                     Write-Transcript @{
                         event = 'library_upload'; fileName = (Split-Path $file -Leaf); source = $file
-                        sha256 = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLower()
+                        sha256 = Get-FileSha256 $file
                         bytes = (Get-Item -LiteralPath $file).Length; description = $desc
                     }
                     Write-Status "Uploaded $(Split-Path $file -Leaf) to the tenant library." 'Good'

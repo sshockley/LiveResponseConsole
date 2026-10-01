@@ -24,7 +24,7 @@ BeforeAll {
     }
 
     foreach ($name in 'Invoke-MdeApi', 'Invoke-ConsoleLine', 'Split-CommandLine', 'Build-ChainedCommand', 'Write-Usage',
-        'Request-Token', 'Confirm-Action', 'Resolve-MdeMachine', 'Get-StoreCertificate') {
+        'Request-Token', 'Confirm-Action', 'Resolve-MdeMachine', 'Get-StoreCertificate', 'Get-FileSha256') {
         $fn = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
