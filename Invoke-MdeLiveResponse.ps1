@@ -580,8 +580,13 @@ function Receive-LiveResponseResult {
     try {
         Invoke-WebRequest -Uri $Url -OutFile $tmp -MaximumRedirection 5 | Out-Null
 
-        $bytes = [IO.File]::ReadAllBytes($tmp)
-        $isGzip = $bytes.Length -gt 2 -and $bytes[0] -eq 0x1f -and $bytes[1] -eq 0x8b
+        # Only the header is needed here. ReadAllBytes refuses files over 2 GB, and GetFile
+        # results can be larger.
+        $head = [byte[]]::new(64KB)
+        $hs = [IO.File]::OpenRead($tmp)
+        try { $headLength = $hs.Read($head, 0, $head.Length) } finally { $hs.Dispose() }
+        [Array]::Resize([ref]$head, $headLength)
+        $isGzip = $head.Length -gt 2 -and $head[0] -eq 0x1f -and $head[1] -eq 0x8b
 
         if ($CommandType -eq 'GetFile') {
             if (-not (Test-Path $DownloadPath)) { New-Item -ItemType Directory -Path $DownloadPath -Force | Out-Null }
@@ -591,7 +596,7 @@ function Receive-LiveResponseResult {
             $rawLength = (Get-Item -LiteralPath $tmp).Length
             $extracted = $false
             if ($isGzip) {
-                $orig = Get-GzipOriginalName -Bytes $bytes
+                $orig = Get-GzipOriginalName -Bytes $head
                 # FNAME is endpoint-supplied. Strip anything that is not a plain filename char,
                 # including C1 controls: the ISO-8859-1 decode can yield 0x9B (8-bit CSI).
                 if ($orig) { $orig = [regex]::Replace($orig, '[\x00-\x1f\x7f-\x9f<>:"/\\|?*]', '_') }
