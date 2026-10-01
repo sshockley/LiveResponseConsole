@@ -122,6 +122,12 @@ Describe 'Resolve-MdeMachine' {
         Mock Invoke-MdeApi -ParameterFilter { $Path -eq 'api/machines/abc' } { New-Machine 'byid' (Get-Date) }
         (Resolve-MdeMachine -Id 'abc').computerDnsName | Should -Be 'byid'
     }
+
+    It 'treats a 40-hex name as a machine id' {
+        $id = 'A' * 40
+        Mock Invoke-MdeApi -ParameterFilter { $Path -eq "api/machines/$id" } { New-Machine 'byid' (Get-Date) }
+        (Resolve-MdeMachine -Name " $id ").computerDnsName | Should -Be 'byid'
+    }
 }
 
 Describe 'Get-StoreCertificate' {

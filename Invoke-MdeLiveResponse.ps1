@@ -476,8 +476,11 @@ function Invoke-MdeApi {
 }
 
 function Resolve-MdeMachine {
+    <# Looks a device up by -Id, or by -Name. A -Name that is a 40-hex machine id is
+       treated as one, so prompts can accept either. #>
     param([string]$Name, [string]$Id)
 
+    if (-not $Id -and $Name -match '^(?i)\s*[0-9a-f]{40}\s*$') { $Id = $Name.Trim() }
     if ($Id) { return Invoke-MdeApi -Path "api/machines/$Id" }
 
     # OData string literals escape a single quote by doubling it.
@@ -919,11 +922,7 @@ function Invoke-ConsoleLine {
 
         'open' {
             if (-not $rest) { Write-Usage 'Usage: open <deviceName|machineId>'; break }
-            $script:Machine = if ($rest -match '^(?i)[0-9a-f]{40}$') {
-                Resolve-MdeMachine -Id $rest
-            } else {
-                Resolve-MdeMachine -Name $rest
-            }
+            $script:Machine = Resolve-MdeMachine -Name $rest
             Write-Transcript @{ event = 'retarget'; machine = $script:Machine.computerDnsName; machineId = $script:Machine.id }
             Write-Status "Now targeting $($script:Machine.computerDnsName)" 'Good'
             break
@@ -1182,7 +1181,6 @@ if ($LogPath) { $LogPath = $ExecutionContext.SessionState.Path.GetUnresolvedProv
 if (-not $DeviceName -and -not $MachineId) {
     if ($script:NonInteractive) { throw '-Command requires -DeviceName or -MachineId.' }
     $DeviceName = Read-Host 'Device name (or machine id)'
-    if ($DeviceName -match '^(?i)\s*[0-9a-f]{40}\s*$') { $MachineId = $DeviceName.Trim() }
 }
 
 $script:AuthMode = $PSCmdlet.ParameterSetName
@@ -1206,7 +1204,7 @@ Write-Status "Authenticating to $($script:Cfg.Api) ($Cloud)..." 'Info'
 Request-Token
 Write-Status 'Token acquired.' 'Good'
 
-$script:Machine = if ($MachineId) { Resolve-MdeMachine -Id $MachineId } else { Resolve-MdeMachine -Name $DeviceName }
+$script:Machine = Resolve-MdeMachine -Name $DeviceName -Id $MachineId
 
 if ($script:Machine.healthStatus -ne 'Active') {
     Write-Status "Device health is '$($script:Machine.healthStatus)'. Actions will queue until it checks in (up to 3 days)." 'Warn'
