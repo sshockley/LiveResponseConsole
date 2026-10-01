@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Analyze and test (${{ matrix.os }})
@@ -15,7 +18,7 @@ jobs:
         os: [windows-latest, ubuntu-latest]
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Pester and PSScriptAnalyzer
         shell: pwsh
@@ -24,17 +27,17 @@ jobs:
           Install-Module Pester -MinimumVersion 5.5 -Force -SkipPublisherCheck
           Install-Module PSScriptAnalyzer -Force
 
-      - name: PSScriptAnalyzer (fail on Severity=Error only)
+      - name: PSScriptAnalyzer (fail on Warning or Error)
         shell: pwsh
         run: |
           # Write-Host and Invoke-Expression warnings are intentional in this project
           # (console UI; the wrapper's whole purpose is to run a supplied expression),
-          # so only Error-severity findings fail the build. Warnings are still printed.
+          # so those two rules are excluded. Information findings are printed but do not fail.
           $all = Invoke-ScriptAnalyzer -Path . -Recurse -ExcludeRule PSAvoidUsingWriteHost, PSAvoidUsingInvokeExpression
           if ($all) { $all | Format-Table RuleName, Severity, ScriptName, Line, Message -AutoSize | Out-String -Width 200 | Write-Host }
-          $errors = @($all | Where-Object Severity -eq 'Error')
-          if ($errors.Count -gt 0) { throw "PSScriptAnalyzer reported $($errors.Count) error(s)." }
-          Write-Host "PSScriptAnalyzer: no errors ($(@($all).Count) warning/information findings)."
+          $failing = @($all | Where-Object Severity -in 'Warning', 'Error', 'ParseError')
+          if ($failing.Count -gt 0) { throw "PSScriptAnalyzer reported $($failing.Count) warning/error finding(s)." }
+          Write-Host "PSScriptAnalyzer: clean ($(@($all).Count) information findings)."
 
       - name: Parse check
         shell: pwsh
@@ -60,7 +63,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pester-results-${{ matrix.os }}
           path: testResults.xml

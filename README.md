@@ -160,7 +160,7 @@ Expect roughly 10 to 40 seconds per command, unlike the sub-second response of t
 
 Unit tests (Pester 5) cover the parsing and sanitizing helpers, plus API retry handling
 and console verb dispatch with the network mocked. CI runs
-PSScriptAnalyzer (failing on Error severity only) and the tests on Windows and Ubuntu.
+PSScriptAnalyzer (failing on Warning or Error) and the tests on Windows and Ubuntu.
 
 ```powershell
 Install-Module Pester -MinimumVersion 5.5 -Scope CurrentUser -Force
