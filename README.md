@@ -69,7 +69,7 @@ $env:MDE_CLIENT_SECRET = '...'   # or omit and be prompted
 ```
 ## Parameters
 
-Clouds: `-Cloud Commercial|UsGovGcc|UsGovGccHigh|UsGovDoD`. Override the host with `-ApiBaseUri https://eu.api.security.microsoft.com` for lower latency. Verify gov host names against current docs as they can change.
+Clouds: `-Cloud Commercial|UsGovGcc|UsGovGccHigh|UsGovDoD`. `-ApiBaseUri` overrides the API host, e.g. a regional `https://eu.api.security.microsoft.com` for lower latency. The tradeoff: that host is not the token audience, and newly created actions can 404 there for a while as they replicate. The script tolerates that for 2 minutes per action, but the default host avoids it. Verify gov host names against current docs as they can change.
 
 Other parameters: `-MachineId`, `-DownloadPath`, `-LogPath`, `-PollIntervalSeconds`, `-ActionTimeoutMinutes`, `-MaxExtractGB`, `-SaveOutput`, `-Comment`, `-CommandWrapperScript`, `-Command`.
 

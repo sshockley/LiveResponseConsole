@@ -66,6 +66,7 @@ param(
     [string]$Cloud = 'Commercial',
 
     # Override the API host, e.g. https://eu.api.security.microsoft.com for lower latency.
+    # New actions may 404 there briefly while they replicate (see the note on $CloudMap).
     [string]$ApiBaseUri,
 
     [string]$CommandWrapperScript = 'Invoke-LRCommand.ps1',
