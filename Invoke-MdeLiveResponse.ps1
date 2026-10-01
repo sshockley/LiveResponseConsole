@@ -365,6 +365,14 @@ function Resolve-MdeMachine {
     # ConvertFrom-Json already yields DateTime here. Casting would throw on a device that
     # has never reported lastSeen.
     $active = @($hits | Sort-Object lastSeen -Descending)
+
+    # startswith also matches longer names (ws-eng-04 hits ws-eng-042). Prefer devices
+    # whose FQDN or short hostname is exactly what was typed.
+    $exact = @($active | Where-Object {
+        $_.computerDnsName -ieq $Name -or ($_.computerDnsName -split '\.')[0] -ieq $Name
+    })
+    if ($exact.Count -gt 0) { $active = $exact }
+
     if ($active.Count -gt 1) {
         if ($script:NonInteractive) {
             throw "$($active.Count) devices match '$Name'. Use -MachineId or a more specific name when using -Command."
@@ -376,6 +384,10 @@ function Resolve-MdeMachine {
                 $i++, $m.computerDnsName, $m.osPlatform, $m.lastSeen, $m.healthStatus)
         }
         $pick = Read-Host 'Select index'
+        # Throw rather than return $null, so 'open' keeps the current target.
+        if ($pick -notmatch '^\s*\d+\s*$' -or [int]$pick -ge $active.Count) {
+            throw "Invalid selection '$pick'."
+        }
         return $active[[int]$pick]
     }
     $active[0]
