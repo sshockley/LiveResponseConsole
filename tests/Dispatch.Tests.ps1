@@ -49,6 +49,7 @@ BeforeAll {
 
     $script:Cfg = @{ Api = 'https://api.test'; Authority = 'https://login.test'; Resource = 'https://api.test' }
     $CommandWrapperScript = 'Invoke-LRCommand.ps1'
+    $script:CommandProtocol = 1
     $TenantId = 'tenant'
     $ClientId = 'client'
 }
@@ -287,7 +288,7 @@ Describe 'Invoke-ConsoleLine' {
         Invoke-ConsoleLine 'cmd Get-ChildItem "C:\Program Files" -Force' | Should -BeTrue
         Should -Invoke Invoke-LiveResponseAction -Times 1 -ParameterFilter {
             $p = $Commands[0].params
-            $enc = ($p | Where-Object key -eq 'Args').value -replace '^-EncodedCommand ', ''
+            $enc = ($p | Where-Object key -eq 'Args').value -replace '^-Protocol 1 -EncodedCommand ', ''
             ($p | Where-Object key -eq 'ScriptName').value -eq 'Invoke-LRCommand.ps1' -and
                 [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($enc)) -eq 'Get-ChildItem "C:\Program Files" -Force' -and
                 $ActionComment -eq 'case 1'

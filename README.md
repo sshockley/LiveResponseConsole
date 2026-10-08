@@ -42,7 +42,7 @@ the library from the console prompt. This needs `Library.Manage`.
 library upload ./Invoke-LRCommand.ps1 "Analyst command channel"
 ```
 `cmd` sends its text base64-encoded (`-EncodedCommand`), so re-upload the wrapper whenever
-you update the client. An older wrapper in the library will fail on the encoded argument.
+you update the client.
 
 ## Authentication
 

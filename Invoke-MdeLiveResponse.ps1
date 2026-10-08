@@ -88,6 +88,10 @@ param(
 Set-StrictMode -Version 1.0
 $ErrorActionPreference = 'Stop'
 
+# Wrapper protocol that cmd expects. Bump it together with $WrapperProtocol in
+# Invoke-LRCommand.ps1 whenever cmd sends something an older wrapper can't handle.
+$script:CommandProtocol = 1
+
 #region Cloud endpoints -------------------------------------------------------
 
 $CloudMap = @{
@@ -1074,7 +1078,7 @@ function Invoke-ConsoleLine {
                 type   = 'RunScript'
                 params = @(
                     @{ key = 'ScriptName'; value = $CommandWrapperScript },
-                    @{ key = 'Args'; value = "-EncodedCommand $encoded" }
+                    @{ key = 'Args'; value = "-Protocol $script:CommandProtocol -EncodedCommand $encoded" }
                 )
             })
             Show-ActionResult (Invoke-LiveResponseAction -Commands $commands -ActionComment $script:SessionComment)

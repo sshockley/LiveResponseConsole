@@ -17,10 +17,15 @@
     The client sends the command as -EncodedCommand <base64 of UTF-8 text>, so quoting
     survives the trip. Plain arguments are still accepted and joined with spaces, but
     quotes in them are lost to argument splitting on the endpoint.
+
+    The client also sends -Protocol <n>. If n is higher than $WrapperProtocol, this copy
+    is older than the client and exits 3 without running anything.
 #>
 # PositionalBinding off, so a plain first argument is never taken as EncodedCommand.
 [CmdletBinding(PositionalBinding = $false)]
 param(
+    [int]$Protocol,
+
     [string]$EncodedCommand,
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -29,6 +34,15 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference    = 'SilentlyContinue'
+
+# Bump together with $script:CommandProtocol in Invoke-MdeLiveResponse.ps1.
+$WrapperProtocol = 1
+
+if ($Protocol -gt $WrapperProtocol) {
+    Write-Output "Invoke-LRCommand.ps1 is out of date: it uses protocol $WrapperProtocol, but the client sent protocol $Protocol."
+    Write-Output 'Re-upload the wrapper from the client''s folder: library upload ./Invoke-LRCommand.ps1 --force'
+    exit 3
+}
 
 $command = if ($EncodedCommand) {
     [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($EncodedCommand)).Trim()
