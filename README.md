@@ -141,6 +141,9 @@ put winpmem.exe --run Dump-Memory.ps1 -full --get C:\Windows\Temp\mem.raw.gz
   Each line carries the SHA-256 of the line before it, so `./Test-LRTranscript.ps1 <file>`
   finds any edited, inserted or removed line. Lines cut off the end can't be detected that
   way, so note the `Transcript hash` printed at exit in your case notes
+- Command history: the prompt keeps its own PSReadLine history in `LiveResponseConsole/history.txt`
+  under `%LOCALAPPDATA%` (`~/.local/share` on Linux and macOS). Console sessions share it;
+  your shell does not, and gets its own history back on exit.
 
 ## Limits
 

@@ -1109,17 +1109,53 @@ function Write-ConsoleError {
     Write-Transcript @{ event = 'error'; message = $ErrorRecord.Exception.Message; input = $Line }
 }
 
+function Switch-ReadLineHistory {
+    <# Points PSReadLine at another history file and replaces the in-memory history with that
+       file's lines, or with -Lines when given. PSReadLine has no public way to load a file:
+       lines it picks up after a path change count as another session's, and up/down arrow
+       skip those. So this calls its private ReadHistoryFile, which marks them recallable.
+       Before the host's first prompt nothing is loaded yet, and PSReadLine reads the new
+       path itself when it starts. #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Changes only this process''s PSReadLine options; the caller restores them.')]
+    param([string]$Path, $SaveStyle, [string[]]$Lines)
+    $rl = [Microsoft.PowerShell.PSConsoleReadLine]
+    $flags = [Reflection.BindingFlags]'NonPublic, Instance'
+    $singleton = $rl.GetField('_singleton', [Reflection.BindingFlags]'NonPublic, Static').GetValue($null)
+    $loaded = $null -ne $rl.GetField('_history', $flags).GetValue($singleton)
+    $readFile = $rl.GetMethod('ReadHistoryFile', $flags)
+    if (-not $readFile) { throw 'This PSReadLine version has no ReadHistoryFile.' }
+
+    # SaveNothing while swapping, so no line is written to the wrong file.
+    Set-PSReadLineOption -HistorySaveStyle SaveNothing
+    if ($loaded) { $rl::ClearHistory() }
+    Set-PSReadLineOption -HistorySavePath $Path
+    if ($PSBoundParameters.ContainsKey('Lines')) {
+        foreach ($line in $Lines) { $rl::AddToHistory($line) }
+    } elseif ($loaded) {
+        [void]$readFile.Invoke($singleton, @())
+    }
+    Set-PSReadLineOption -HistorySaveStyle $SaveStyle
+}
+
 function Initialize-ConsoleInput {
     <# Best-effort PSReadLine so the REPL gets history, arrow keys and line editing.
-       Console commands are kept out of the on-disk PSReadLine history for this session
-       (they often name case paths and hosts); the caller's setting is restored on exit. #>
+       Console commands get their own history file, shared by console sessions but not with
+       the shell: the shell's history is swapped out here and back in on exit. #>
     $script:UsePSReadLine = $false
-    $script:PrevHistorySaveStyle = $null
+    $script:ShellHistory = $null
     try {
         Import-Module PSReadLine -ErrorAction Stop
         if (Get-Command PSConsoleHostReadLine -ErrorAction SilentlyContinue) {
-            $script:PrevHistorySaveStyle = (Get-PSReadLineOption).HistorySaveStyle
-            Set-PSReadLineOption -HistorySaveStyle SaveNothing
+            $options = Get-PSReadLineOption
+            $shell = @{ Path = $options.HistorySavePath; SaveStyle = $options.HistorySaveStyle; Lines = @() }
+            # Throw if there is no history to keep
+            try { $shell.Lines = @([Microsoft.PowerShell.PSConsoleReadLine]::GetHistoryItems() | ForEach-Object CommandLine) } catch {
+                Write-Verbose "No shell history loaded yet ($($_.Exception.Message))."
+            }
+            $path = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'LiveResponseConsole' -AdditionalChildPath 'history.txt'
+            $script:ShellHistory = $shell
+            Switch-ReadLineHistory -Path $path -SaveStyle SaveIncrementally
             $script:UsePSReadLine = $true
         }
     } catch {
@@ -1129,10 +1165,19 @@ function Initialize-ConsoleInput {
 }
 
 function Restore-ConsoleInput {
-    if ($null -ne $script:PrevHistorySaveStyle) {
-        try { Set-PSReadLineOption -HistorySaveStyle $script:PrevHistorySaveStyle } catch {
-            Write-Verbose "Could not restore PSReadLine HistorySaveStyle: $($_.Exception.Message)"
+    $shell = $script:ShellHistory
+    if (-not $shell) { return }
+    try {
+        if ($shell.SaveStyle -eq 'SaveNothing') {
+            # The shell's file is not its history, so put back the copy taken at startup.
+            Switch-ReadLineHistory -Path $shell.Path -SaveStyle $shell.SaveStyle -Lines $shell.Lines
+        } else {
+            # Reloaded from the shell's file. Memory-only lines (ones its AddToHistoryHandler
+            # kept off disk, and under SaveAtExit this session's) are not in it and stay dropped.
+            Switch-ReadLineHistory -Path $shell.Path -SaveStyle $shell.SaveStyle
         }
+    } catch {
+        Write-Verbose "Could not restore the shell's PSReadLine history: $($_.Exception.Message)"
     }
 }
 
@@ -1165,8 +1210,9 @@ function Start-Repl {
     Write-Host '  Type "help" for commands. Each command is a tenant-logged machine action.' -ForegroundColor DarkGray
     Write-Host ''
 
-    Initialize-ConsoleInput
     try {
+        # Inside the try: a swap that fails halfway still gets the shell's history put back.
+        Initialize-ConsoleInput
         while ($true) {
             $line = Read-ConsoleLine -Prompt ('{0}> ' -f $script:Machine.computerDnsName)
             try {

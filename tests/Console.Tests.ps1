@@ -293,3 +293,74 @@ Describe 'Remove-ControlCharacter' {
         Remove-ControlCharacter '' | Should -Be ''
     }
 }
+
+Describe 'Switch-ReadLineHistory' {
+    # Runs in a child pwsh: the swap changes process-wide PSReadLine state, and doing it here
+    # would replace the history of whatever shell is running Pester.
+    BeforeAll {
+        $child = {
+            param($ScriptPath, $Dir)
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($ScriptPath, [ref]$null, [ref]$null)
+            $fn = $ast.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Switch-ReadLineHistory'
+            }, $false)
+            . ([scriptblock]::Create($fn.Extent.Text))
+
+            Import-Module PSReadLine
+            $rl = [Microsoft.PowerShell.PSConsoleReadLine]
+            function Get-HistoryLine { @($rl::GetHistoryItems() | ForEach-Object { $_.CommandLine + $(if ($_.FromOtherSession) { '[other]' }) }) }
+            $shellFile = Join-Path $Dir 'shell.txt'
+            $consoleFile = Join-Path $Dir 'console.txt'
+            Set-Content -LiteralPath $shellFile -Value 'shell-a', 'shell-b'
+            Set-Content -LiteralPath $consoleFile -Value 'console-a'
+
+            # Stand-in for the host's first prompt, which is what normally loads history.
+            Set-PSReadLineOption -HistorySavePath $shellFile -HistorySaveStyle SaveIncrementally
+            $singleton = $rl.GetField('_singleton', [Reflection.BindingFlags]'NonPublic, Static').GetValue($null)
+            try { [void]$rl.GetMethod('DelayedOneTimeInitialize', [Reflection.BindingFlags]'NonPublic, Instance').Invoke($singleton, @()) }
+            catch { return @{ Skip = "PSReadLine would not start here: $($_.Exception.InnerException.Message)" } | ConvertTo-Json }
+            $rl::AddToHistory('shell-c')
+
+            $r = @{}
+            Switch-ReadLineHistory -Path $consoleFile -SaveStyle SaveIncrementally
+            $r.ConsoleLoaded = Get-HistoryLine
+            $rl::AddToHistory('console-b')
+            Switch-ReadLineHistory -Path $shellFile -SaveStyle SaveIncrementally
+            $r.ShellRestored = Get-HistoryLine
+            $rl::AddToHistory('shell-d')
+            $r.ShellFile = @(Get-Content -LiteralPath $shellFile)
+            $r.ConsoleFile = @(Get-Content -LiteralPath $consoleFile)
+            Switch-ReadLineHistory -Path $shellFile -SaveStyle SaveNothing -Lines 'kept-1', 'kept-2'
+            $r.FromLines = Get-HistoryLine
+            $r | ConvertTo-Json
+        }
+        $scriptPath = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'Invoke-MdeLiveResponse.ps1'
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ('lr_hist_{0}' -f [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $dir | Out-Null
+        $json = & pwsh -NoProfile -NonInteractive -Command "& { $child } '$scriptPath' '$dir'"
+        $script:Result = ($json -join "`n") | ConvertFrom-Json
+        Remove-Item -LiteralPath $dir -Recurse -Force
+    }
+
+    BeforeEach {
+        if ($script:Result.PSObject.Properties['Skip']) { Set-ItResult -Skipped -Because $script:Result.Skip }
+    }
+
+    It 'loads the other file as history that up/down arrow can recall' {
+        $script:Result.ConsoleLoaded | Should -Be @('console-a')
+    }
+
+    It 'puts the shell''s history back, recallable, without anything typed in between' {
+        $script:Result.ShellRestored | Should -Be @('shell-a', 'shell-b', 'shell-c')
+    }
+
+    It 'writes each line only to the file in use when it was entered' {
+        $script:Result.ConsoleFile | Should -Be @('console-a', 'console-b')
+        $script:Result.ShellFile | Should -Be @('shell-a', 'shell-b', 'shell-c', 'shell-d')
+    }
+
+    It 'uses -Lines instead of the file when given' {
+        $script:Result.FromLines | Should -Be @('kept-1', 'kept-2')
+    }
+}
